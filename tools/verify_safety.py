@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import io
 import json
 import logging
 import os
@@ -17,21 +18,34 @@ import modmesh.core.installation as installation_engine
 import modmesh.core.processes as processes_engine
 import modmesh.core.removal as removal_engine
 from modmesh.adapters.games.minecraft import MinecraftAdapter
+from modmesh.adapters.games.minecraft_mods import matches_native, read_jar, validate_native
 from modmesh.adapters.games.palworld import PalworldAdapter
+from modmesh.core.alternatives import find_alternatives
+from modmesh.core.artifact_matching import ArtifactCandidate
 from modmesh.core.cache import ArtifactCache
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.downloads import DownloadManager, DownloadPolicy, DownloadResult, DownloadState
 from modmesh.core.games import GameRegistry
 from modmesh.core.hashing import verify_file
+from modmesh.core.identity import EvidenceKind, IdentityEvidence, IdentityRegistry
 from modmesh.core.installation import InstallationManager
 from modmesh.core.planning import InstallationPlanner, InstallInput
+from modmesh.core.priorities import SourcePriorities
 from modmesh.core.processes import java_guard
 from modmesh.core.removal import RemovalManager
 from modmesh.core.resolver import DependencyEdge, DependencyResolution, ResolvedMod
-from modmesh.core.sources import DownloadAccess, DownloadMode
+from modmesh.core.sources import (
+    DownloadAccess,
+    DownloadMode,
+    SourceAdapter,
+    SourceCapability,
+    SourceDescriptor,
+    SourceRegistry,
+)
 from modmesh.domain.artifacts import FileHash, HashAlgorithm
 from modmesh.domain.dependencies import Dependency, DependencyKind, DependencyTarget
 from modmesh.domain.models import ModFile, ModVersion, Platform, SourceProject, SourceRef
+from modmesh.storage.metadata import MetadataStore
 
 DATA = b"verified bytes\x00" * 40000
 FILE = ModFile(
@@ -58,6 +72,121 @@ class WaitingStream(httpx.AsyncByteStream):
     async def __aiter__(self):
         yield DATA[:300000]
         await asyncio.Event().wait()
+
+
+class LinkedSource(SourceAdapter):
+    version_filters = True
+
+    def __init__(self, candidate: ArtifactCandidate, access: DownloadAccess) -> None:
+        self.candidate = candidate
+        self.access = access
+        self.denied = False
+        self._descriptor = SourceDescriptor(
+            candidate.project.reference.source_id,
+            "Safety verification",
+            frozenset({"minecraft"}),
+            frozenset(SourceCapability),
+        )
+
+    @property
+    def descriptor(self) -> SourceDescriptor:
+        return self._descriptor
+
+    async def project(self, game_id: str, project_id: str) -> SourceProject:
+        return self.candidate.project
+
+    async def versions(self, game_id: str, project_id: str, *, query=None):
+        if self.denied:
+            raise ModMeshError(ErrorCode.AUTHENTICATION, "Permission unavailable")
+        return (self.candidate.version,)
+
+    async def resolve_download(self, game_id: str, file: ModFile) -> DownloadAccess:
+        return self.access
+
+
+async def check_linked_downloads(root: Path) -> None:
+    reference = SourceRef("origin", "project")
+    file = replace(FILE, project=reference)
+    project = SourceProject(reference, "minecraft", "Identical label")
+    version = ModVersion(
+        reference, "pinned", "1.0", frozenset({"1.21.1"}), frozenset({"fabric"}), files=(file,)
+    )
+    requested = ArtifactCandidate(project, version, file, "1.21.1", "fabric")
+    mirror_ref = SourceRef("mirror", "project")
+    mirror_file = replace(file, project=mirror_ref, file_id="mirror-file")
+    mirror = ArtifactCandidate(
+        replace(project, reference=mirror_ref),
+        replace(version, project=mirror_ref, version_id="other-label", files=(mirror_file,)),
+        mirror_file,
+        "1.21.1",
+        "fabric",
+    )
+    registry = SourceRegistry()
+    registry.register(
+        LinkedSource(
+            requested, DownloadAccess(DownloadMode.EXTERNAL, "https://example.org/project")
+        )
+    )
+    provider = LinkedSource(mirror, ACCESS)
+    registry.register(provider)
+    with MetadataStore(root / "linked.sqlite3") as store:
+        identities = IdentityRegistry(store)
+        assert not (await find_alternatives(requested, registry, identities)).candidates
+        canonical = identities.get_or_create("minecraft", reference)
+        identities.bind(
+            canonical,
+            "minecraft",
+            mirror_ref,
+            IdentityEvidence(EvidenceKind.USER_CONFIRMATION, "safety-verification"),
+        )
+        alternatives = await find_alternatives(requested, registry, identities)
+        assert len(alternatives.candidates) == 1
+        async with DownloadManager(
+            {"mirror": ("example.org",)},
+            resolver=public_addresses,
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, content=DATA)),
+        ) as manager:
+            result = await manager.submit_candidate(
+                requested,
+                alternatives.candidates,
+                registry,
+                SourcePriorities({"minecraft": ("origin", "mirror")}),
+                root / "linked.bin",
+            ).wait()
+            assert result.download_source_id == "mirror" and result.source_id == "origin"
+            assert result.artifact.sha256 == file.hashes[0] and result.path.read_bytes() == DATA
+        weak = replace(
+            mirror_file,
+            hashes=(
+                FileHash(HashAlgorithm.SHA1, hashlib.sha1(DATA, usedforsecurity=False).hexdigest()),
+            ),
+        )
+        provider.candidate = replace(
+            mirror, file=weak, version=replace(mirror.version, files=(weak,))
+        )
+        assert not (await find_alternatives(requested, registry, identities)).candidates
+        provider.candidate = replace(
+            mirror, version=replace(mirror.version, game_versions=frozenset({"1.20.1"}))
+        )
+        assert not (await find_alternatives(requested, registry, identities)).candidates
+        conflicting = replace(mirror_file, hashes=(FileHash(HashAlgorithm.SHA256, "0" * 64),))
+        provider.candidate = replace(
+            mirror, file=conflicting, version=replace(mirror.version, files=(conflicting,))
+        )
+        assert not (await find_alternatives(requested, registry, identities)).candidates
+        provider.denied = True
+        denied = await find_alternatives(requested, registry, identities)
+        assert not denied.candidates and any(
+            "Permission unavailable" in note for note in denied.notes
+        )
+        assert not (
+            await find_alternatives(replace(requested, loader="forge"), registry, identities)
+        ).candidates
+        identities.unbind("minecraft", mirror_ref)
+        provider.denied = False
+        provider.candidate = mirror
+        assert not (await find_alternatives(requested, registry, identities)).candidates
+    await registry.aclose()
 
 
 async def check_downloads(root: Path) -> None:
@@ -636,6 +765,63 @@ def check_minecraft(root: Path) -> None:
         target = game / "mods" / source.name
         assert target.read_bytes() == source.read_bytes()
         if loader == "fabric":
+            assert matches_native("0.8.12-beta.1+mc1.21.1", ("0.8.x",), "fabric")
+            assert not matches_native("0.9.0-alpha", ("0.8.x",), "fabric")
+            assert matches_native("1.21.1", (">=1.15-alpha.19.39.a",), "fabric")
+            assert matches_native("1.2.3.4", (">=1.2.3.3 <1.2.4",), "fabric")
+            assert matches_native("0.9.0", ("^0.8.0",), "fabric")
+            assert matches_native("1.0.99", ("~1",), "fabric")
+            assert not matches_native("1.1.0", ("~1",), "fabric")
+            assert not matches_native("1.2-beta", (">=1.2",), "fabric")
+            assert matches_native("1.2.0", ("1.2",), "fabric")
+            shared = source.read_bytes()
+            embedded = []
+            for identity in ("first", "second"):
+                jar = root / f"{identity}.jar"
+                with zipfile.ZipFile(jar, "w") as archive:
+                    archive.writestr(
+                        "fabric.mod.json",
+                        json.dumps(
+                            {
+                                "schemaVersion": 1,
+                                "id": identity,
+                                "version": "1.0.0",
+                                "depends": {"library": "*"},
+                                "jars": [{"file": "nested/library.jar"}],
+                            }
+                        ),
+                    )
+                    archive.writestr("nested/library.jar", shared)
+                embedded.append((jar.name, read_jar(jar, "fabric")))
+            assert validate_native(installation, tuple(embedded)).valid
+            duplicate = validate_native(
+                installation, (("first.jar", read_jar(source)), ("second.jar", read_jar(source)))
+            )
+            assert not duplicate.valid and any(
+                issue.code == "native_duplicate" for issue in duplicate.issues
+            )
+            altered = io.BytesIO(shared)
+            with zipfile.ZipFile(altered, "a") as archive:
+                archive.writestr("different.txt", "different nested bytes with the same version")
+            with zipfile.ZipFile(root / "second.jar", "w") as archive:
+                archive.writestr(
+                    "fabric.mod.json",
+                    json.dumps(
+                        {
+                            "schemaVersion": 1,
+                            "id": "second",
+                            "version": "1.0.0",
+                            "jars": [{"file": "nested/library.jar"}],
+                        }
+                    ),
+                )
+                archive.writestr("nested/library.jar", altered.getvalue())
+            ambiguous = validate_native(
+                installation, (embedded[0], ("second.jar", read_jar(root / "second.jar")))
+            )
+            assert not ambiguous.valid and any(
+                issue.code == "native_nested_unverified" for issue in ambiguous.issues
+            )
             external = game / "mods/dependent.jar"
             with zipfile.ZipFile(external, "w") as archive:
                 archive.writestr(
@@ -709,6 +895,7 @@ async def main() -> None:
     logging.disable(logging.CRITICAL)
     with TemporaryDirectory(prefix="modmesh-safety-") as name:
         await asyncio.wait_for(check_downloads(Path(name)), timeout=20)
+        await asyncio.wait_for(check_linked_downloads(Path(name)), timeout=20)
         await asyncio.wait_for(check_cache(Path(name)), timeout=20)
         await check_processes(Path(name) / "processes")
         check_planning(Path(name))

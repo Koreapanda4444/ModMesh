@@ -287,6 +287,32 @@ class SearchPanel(QWidget):
             self.details.setPlainText("조건에 맞는 결과가 없습니다. 출처 상태와 필터를 확인하세요.")
             self.selected.emit(None)
 
+    def rematch(self, linked: tuple[SourceProject, ...]) -> None:
+        if not linked:
+            return
+        project = linked[0]
+        projects = tuple({item.reference: item for item in (*self.projects, *linked)}.values())
+        matching = ProjectMatcher(IdentityRegistry(self.store)).match(projects)
+        self.groups = matching.groups
+        self.projects = projects
+        self.results.setRowCount(len(self.groups))
+        selected = 0
+        for row, group in enumerate(self.groups):
+            if any(item.reference == project.reference for item in group.projects):
+                selected = row
+            primary = group.projects[0]
+            fill_row(
+                self.results,
+                row,
+                (
+                    primary.name,
+                    ", ".join(item.reference.source_id for item in group.projects),
+                    ", ".join(primary.authors) or "미확인",
+                ),
+            )
+        self.results.selectRow(selected)
+        self._selected()
+
     @property
     def selected_group(self) -> ProjectGroup | None:
         row = self.results.currentRow()

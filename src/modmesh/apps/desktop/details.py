@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QTextEdit,
     QVBoxLayout,
@@ -28,11 +29,11 @@ from modmesh.apps.runtime import source_priorities, source_registry
 from modmesh.core.config import ClientSettings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.games import GameRegistry
-from modmesh.core.identity import IdentityRegistry
+from modmesh.core.identity import EvidenceKind, IdentityEvidence, IdentityRegistry
 from modmesh.core.installation import OperationResult
-from modmesh.core.matching import ProjectGroup
+from modmesh.core.matching import ProjectGroup, ProjectMatcher
 from modmesh.core.resolver import DependencyResolver, ResolvedMod
-from modmesh.core.sources import DownloadMode, VersionQuery
+from modmesh.core.sources import VersionQuery
 from modmesh.domain.models import GameInstallation, ModFile, ModVersion, SourceProject
 from modmesh.storage.metadata import MetadataStore
 
@@ -78,6 +79,7 @@ class PlanDialog(QDialog):
         notes.setReadOnly(True)
         messages = [f"{issue.code}: {issue.message} {issue.path or ''}" for issue in plan.issues]
         messages.extend(plan.warnings)
+        messages.extend(prepared.source_notes)
         for mod in plan.resolution.mods:
             algorithms = (
                 ", ".join(value.algorithm.value for value in mod.file.hashes) or "출처 해시 없음"
@@ -110,9 +112,11 @@ class ModDetails(QWidget):
         start: WorkStarter,
         description: QTextEdit,
         changed: Callable[[], None],
+        linked: Callable[[tuple[SourceProject, ...]], None],
     ) -> None:
         super().__init__()
         self.settings, self.games, self.start, self.changed = settings, games, start, changed
+        self.linked = linked
         self.installation: GameInstallation | None = None
         self.group: ProjectGroup | None = None
         self.project: SourceProject | None = None
@@ -123,7 +127,10 @@ class ModDetails(QWidget):
         self.dialog: PlanDialog | None = None
         self.applying = False
         layout = QVBoxLayout(self)
+        self.setMinimumWidth(340)
         self.description = description
+        self.description.setMinimumHeight(150)
+        self.description.setMaximumHeight(220)
         layout.addWidget(description, 2)
         self.variant = QComboBox()
         self.variant.currentIndexChanged.connect(self.load_variant)
@@ -156,6 +163,24 @@ class ModDetails(QWidget):
         self.website.clicked.connect(self.open_website)
         self.website.setEnabled(False)
         layout.addWidget(self.website)
+        self.alias_source = QComboBox()
+        for label, key in (
+            ("Modrinth", "modrinth"),
+            ("CurseForge", "curseforge"),
+            ("Nexus Mods", "nexus"),
+        ):
+            self.alias_source.addItem(label, key)
+        layout.addWidget(self.alias_source)
+        self.alias_id = QLineEdit()
+        self.alias_id.setPlaceholderText("다른 출처의 정확한 프로젝트 ID")
+        self.alias_id.setMaxLength(256)
+        layout.addWidget(self.alias_id)
+        self.link = QPushButton("출처 연결 검토")
+        self.link.clicked.connect(self.link_source)
+        layout.addWidget(self.link)
+        self.unlink = QPushButton("선택 출처 연결 해제")
+        self.unlink.clicked.connect(self.unlink_source)
+        layout.addWidget(self.unlink)
         self.status = QLabel("모드를 선택하면 버전과 파일을 확인할 수 있습니다.")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
@@ -338,6 +363,76 @@ class ModDetails(QWidget):
         if self.project and self.project.web_url:
             QDesktopServices.openUrl(QUrl(self.project.web_url))
 
+    def link_source(self) -> None:
+        project = self.project
+        target = self.alias_id.text().strip()
+        source_id = str(self.alias_source.currentData())
+        if project is None or not target or source_id == project.reference.source_id:
+            self.status.setText("다른 출처와 정확한 프로젝트 ID를 선택하세요.")
+            return
+        generation = self.generation
+
+        async def execute() -> SourceProject:
+            async with source_registry() as registry:
+                candidate = await registry.get(source_id).project(project.game_id, target)
+                if (
+                    candidate.game_id != project.game_id
+                    or candidate.reference.source_id != source_id
+                ):
+                    raise ModMeshError(
+                        ErrorCode.CONFLICT, "Linked project belongs to a different game"
+                    )
+                return candidate
+
+        self.start(
+            lambda cancelled: run_async(execute(), cancelled),
+            partial(self._link_ready, generation, project),
+            partial(self._failed, generation),
+            name="출처 연결 조회",
+        )
+
+    def _link_ready(self, generation: int, project: SourceProject, value: object) -> None:
+        if generation != self.generation:
+            return
+        assert isinstance(value, SourceProject)
+        answer = QMessageBox.question(
+            self,
+            "동일 모드 출처 연결",
+            f"{project.name} ({project.reference.source_id}:{project.reference.project_id})\n"
+            f"{value.name} ({value.reference.source_id}:{value.reference.project_id})\n\n"
+            "같은 모드의 공식 배포 프로젝트임을 확인했습니까? 이름만으로 연결하지 마세요. "
+            "다운로드 대체는 강한 해시와 호환 조건도 일치해야 합니다.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            with MetadataStore(self.settings.paths.database) as store:
+                ProjectMatcher(IdentityRegistry(store)).confirm(
+                    project,
+                    value,
+                    IdentityEvidence(
+                        EvidenceKind.USER_CONFIRMATION, "desktop:explicit-source-link"
+                    ),
+                )
+            self.clear_plan()
+            self.linked((project, value))
+            self.status.setText("출처 연결을 저장했습니다. 파일 동일성은 별도로 검사합니다.")
+        except ModMeshError as exc:
+            self.status.setText(exc.message)
+
+    def unlink_source(self) -> None:
+        if self.project is None:
+            return
+        project = self.project
+        try:
+            with MetadataStore(self.settings.paths.database) as store:
+                IdentityRegistry(store).unbind(project.game_id, project.reference)
+            self.clear_plan()
+            self.linked((project, *(self.group.projects if self.group else ())))
+            self.status.setText("선택 출처 연결을 해제했습니다.")
+        except ModMeshError as exc:
+            self.status.setText(exc.message)
+
     def prepare_selected(self) -> None:
         mod, installation = self.selected_mod, self.installation
         if mod is None or installation is None or not self.prepare.isEnabled():
@@ -356,15 +451,6 @@ class ModDetails(QWidget):
         def work(cancelled: threading.Event) -> PreparedInstallation:
             async def execute() -> PreparedInstallation:
                 async with source_registry() as registry:
-                    access = await registry.get(mod.project.reference.source_id).resolve_download(
-                        mod.project.game_id, mod.file
-                    )
-                    if access.mode != DownloadMode.DIRECT:
-                        raise ModMeshError(
-                            ErrorCode.UNSUPPORTED,
-                            access.reason
-                            or "직접 다운로드가 허용되지 않습니다. 공식 페이지에서 확인하세요.",
-                        )
                     with MetadataStore(self.settings.paths.database) as store:
                         resolution = await DependencyResolver(
                             registry,

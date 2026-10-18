@@ -383,6 +383,7 @@ async def _plan(
         payload = asdict(plan)
         payload["applicable"] = plan.applicable
         payload["fingerprint"] = plan.fingerprint
+        payload["source_notes"] = prepared.source_notes
         if args.apply:
             result = await _blocking(
                 partial(

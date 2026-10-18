@@ -1,16 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import re
 import stat
 import tomllib
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from itertools import zip_longest
 from pathlib import Path
 from typing import BinaryIO
-
-from semantic_version import NpmSpec, Version
 
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.games import EnvironmentIssue, EnvironmentReport
@@ -52,6 +52,7 @@ class NativeMod:
     aliases: tuple[str, ...] = ()
     environment: str = "*"
     language_range: str | None = None
+    embedded_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -221,7 +222,9 @@ def read_jar(path: Path, loader: str | None = None) -> JarMetadata:
         raise ModMeshError(ErrorCode.VALIDATION, "Mod JAR must be a bounded regular file")
     budget = [0, 0]
 
-    def inspect(source: Path | BinaryIO, depth: int, required: bool) -> JarMetadata:
+    def inspect(
+        source: Path | BinaryIO, depth: int, required: bool, digest: str | None = None
+    ) -> JarMetadata:
         budget[0] += 1
         if depth > 8 or budget[0] > 256:
             raise ModMeshError(ErrorCode.VALIDATION, "Nested mod JAR limit reached")
@@ -267,13 +270,16 @@ def read_jar(path: Path, loader: str | None = None) -> JarMetadata:
                 ):
                     raise ModMeshError(ErrorCode.VALIDATION, "Invalid Jar-in-Jar metadata")
                 nested += tuple(portable_path(text(item.get("path"))) for item in jarjar)
-            mods, warnings = list(result.mods), list(result.warnings)
+            mods = [replace(mod, embedded_hash=digest) for mod in result.mods]
+            warnings = list(result.warnings)
             for name in dict.fromkeys(nested):
                 content = _read(archive, name, 32 * 1024**2)
                 budget[1] += len(content)
                 if budget[1] > 256 * 1024**2:
                     raise ModMeshError(ErrorCode.VALIDATION, "Nested JAR byte limit reached")
-                child = inspect(io.BytesIO(content), depth + 1, False)
+                child = inspect(
+                    io.BytesIO(content), depth + 1, False, hashlib.sha256(content).hexdigest()
+                )
                 mods.extend(child.mods)
                 warnings.extend(child.warnings)
             if any(
@@ -308,25 +314,90 @@ def _numeric(value: str) -> tuple[int, ...]:
     return (*parts, *(0 for _ in range(8 - len(parts))))
 
 
+def _fabric_version(value: str) -> tuple[tuple[int, ...], str | None] | None:
+    core = value.partition("+")[0]
+    numbers, separator, prerelease = core.partition("-")
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", numbers) or (
+        separator and not re.fullmatch(r"|[-0-9A-Za-z]+(?:\.[-0-9A-Za-z]+)*", prerelease)
+    ):
+        return None
+    parts = tuple(int(part) for part in numbers.split("."))
+    if any(part > 2**31 - 1 for part in parts):
+        return None
+    return parts, prerelease if separator else None
+
+
+def _fabric_compare(
+    left: tuple[tuple[int, ...], str | None], right: tuple[tuple[int, ...], str | None]
+) -> int:
+    for a, b in zip_longest(left[0], right[0], fillvalue=0):
+        if a != b:
+            return 1 if a > b else -1
+    first, second = left[1], right[1]
+    if first is None or second is None:
+        return (first is None) - (second is None)
+    a_parts, b_parts = first.split(".") if first else [], second.split(".") if second else []
+    for a_key, b_key in zip_longest(a_parts, b_parts):
+        if a_key is None or b_key is None:
+            return 1 if b_key is None else -1
+        if a_key == b_key:
+            continue
+        a_number = bool(re.fullmatch(r"0|[1-9][0-9]*", a_key))
+        b_number = bool(re.fullmatch(r"0|[1-9][0-9]*", b_key))
+        if a_number != b_number:
+            return -1 if a_number else 1
+        if a_number:
+            return 1 if int(a_key) > int(b_key) else -1
+        return 1 if a_key > b_key else -1
+    return 0
+
+
+def _fabric_term(version: str, term: str) -> bool:
+    if term in {"", "*"}:
+        return True
+    parsed = re.fullmatch(r"(>=|<=|>|<|=|~|\^)?([^\s|]+)", term)
+    if parsed is None:
+        raise ModMeshError(ErrorCode.UNSUPPORTED, "Fabric predicate syntax cannot be verified")
+    operator, reference = parsed.group(1) or "=", parsed.group(2)
+    current = _fabric_version(version)
+    wildcard = re.fullmatch(r"([0-9]+(?:\.[0-9]+)*)\.[xX*](?:\.[xX*])*(?:\+.*)?", reference)
+    if wildcard:
+        if operator != "=":
+            raise ModMeshError(ErrorCode.VALIDATION, "Fabric wildcard needs equality operator")
+        lower = _fabric_version(wildcard.group(1) + "-")
+        if current is None or lower is None:
+            return False
+        return _fabric_compare(current, lower) >= 0 and all(
+            (current[0][index] if index < len(current[0]) else 0) == part
+            for index, part in enumerate(lower[0])
+        )
+    expected = _fabric_version(reference)
+    if expected is None and operator in {">", "<"}:
+        raise ModMeshError(ErrorCode.UNSUPPORTED, "Nonsemantic Fabric range cannot be verified")
+    if current is None or expected is None:
+        return operator not in {">", "<"} and version == reference
+    comparison = _fabric_compare(current, expected)
+    if operator == "^":
+        return comparison >= 0 and current[0][0] == expected[0][0]
+    if operator == "~":
+        return comparison >= 0 and (*current[0], 0)[:2] == (*expected[0], 0)[:2]
+    return {
+        "=": comparison == 0,
+        ">": comparison > 0,
+        "<": comparison < 0,
+        ">=": comparison >= 0,
+        "<=": comparison <= 0,
+    }[operator]
+
+
 def matches_native(version: str, expressions: tuple[str, ...], scheme: str) -> bool:
     if scheme == "fabric":
-        for expression in expressions:
-            if expression in {"*", version}:
-                return True
-            try:
-                parts = version.split(".")
-                normalized = (
-                    version + ".0" * (3 - len(parts))
-                    if version.isdecimal() or re.fullmatch(r"\d+\.\d+", version)
-                    else version
-                )
-                if NpmSpec(expression).match(Version(normalized)):
-                    return True
-            except ValueError as exc:
-                raise ModMeshError(
-                    ErrorCode.UNSUPPORTED, "Fabric version predicate cannot be verified"
-                ) from exc
-        return False
+        return any(
+            [
+                all([_fabric_term(version, term) for term in expression.split(" ")])
+                for expression in expressions
+            ]
+        )
     for expression in expressions:
         if not expression:
             return True
@@ -362,18 +433,34 @@ def validate_native(
 ) -> EnvironmentReport:
     issues = []
     known: dict[str, tuple[str | None, str]] = {}
+    owners: dict[str, NativeMod] = {}
+    selected: set[tuple[str, NativeMod]] = set()
     for path, jar in jars:
         for mod in jar.mods:
-            for identity in dict.fromkeys((mod.mod_id, *mod.aliases)):
-                if identity in known and known[identity] != (mod.version, path):
+            identities = tuple(dict.fromkeys((mod.mod_id, *mod.aliases)))
+            previous = [owners[identity] for identity in identities if identity in owners]
+            if (
+                previous
+                and mod.loader == "fabric"
+                and mod.embedded_hash
+                and all(other == mod for other in previous)
+            ):
+                continue
+            for identity in identities:
+                if identity in known:
+                    embedded = mod.embedded_hash and owners[identity].embedded_hash
                     issues.append(
                         EnvironmentIssue(
-                            "native_duplicate",
-                            f"Native mod ID appears in multiple JARs: {identity}",
+                            "native_nested_unverified" if embedded else "native_duplicate",
+                            f"Different nested JARs need loader resolution: {identity}"
+                            if embedded
+                            else f"Native mod ID appears in multiple JARs: {identity}",
                             True,
                         )
                     )
                 known[identity] = (mod.version, path)
+                owners[identity] = mod
+            selected.add((path, mod))
     loader = installation.loader
     known["minecraft"] = (installation.version.value, "game")
     if loader is not None:
@@ -407,6 +494,8 @@ def validate_native(
                     )
                 )
         for mod in jar.mods:
+            if (path, mod) not in selected:
+                continue
             if mod.environment == "server" and lost is None:
                 issues.append(
                     EnvironmentIssue(

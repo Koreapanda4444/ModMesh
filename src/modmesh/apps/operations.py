@@ -8,17 +8,20 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from modmesh.apps.runtime import DOWNLOAD_DOMAINS, create_game_registry, source_priorities
+from modmesh.core.alternatives import find_alternatives
 from modmesh.core.artifact_matching import ArtifactCandidate
 from modmesh.core.cache import ArtifactCache
 from modmesh.core.config import ClientSettings
 from modmesh.core.conflicts import analyze_dependencies
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.downloads import DownloadManager, DownloadPolicy, DownloadResult, _blocking
+from modmesh.core.identity import IdentityRegistry
 from modmesh.core.installation import InstallationManager
 from modmesh.core.planning import InstallationPlan, InstallInput
 from modmesh.core.resolver import DependencyResolution, ResolvedMod
 from modmesh.core.sources import SourceRegistry
 from modmesh.domain.models import GameInstallation
+from modmesh.storage.metadata import MetadataStore
 
 
 @dataclass
@@ -27,6 +30,7 @@ class PreparedInstallation:
     manager: InstallationManager
     temporary: TemporaryDirectory[str]
     replace_existing: bool
+    source_notes: tuple[str, ...] = ()
 
     def close(self) -> None:
         self.temporary.cleanup()
@@ -54,6 +58,7 @@ async def prepare_resolution(
     temporary = TemporaryDirectory(prefix="modmesh-plan-")
     try:
         inputs = []
+        source_notes: list[str] = []
         with ArtifactCache(settings.paths.cache_dir, max_bytes=settings.cache_max_bytes) as cache:
             async with DownloadManager(
                 DOWNLOAD_DOMAINS,
@@ -64,20 +69,30 @@ async def prepare_resolution(
                     async def fetch(
                         destination: Path, selected: ResolvedMod = mod
                     ) -> DownloadResult:
-                        return await downloads.submit_candidate(
-                            ArtifactCandidate(
-                                selected.project,
-                                selected.version,
-                                selected.file,
-                                resolution.game_version,
-                                resolution.loader,
-                            ),
-                            (),
+                        requested = ArtifactCandidate(
+                            selected.project,
+                            selected.version,
+                            selected.file,
+                            resolution.game_version,
+                            resolution.loader,
+                        )
+                        with MetadataStore(settings.paths.database) as store:
+                            alternatives = await find_alternatives(
+                                requested, registry, IdentityRegistry(store)
+                            )
+                        source_notes.extend(alternatives.notes)
+                        result = await downloads.submit_candidate(
+                            requested,
+                            alternatives.candidates,
                             registry,
                             source_priorities(settings.source_priorities),
                             destination,
                             progress=progress,
                         ).wait()
+                        source_notes.append(
+                            f"{selected.project.name}: downloaded via {result.download_source_id}"
+                        )
+                        return result
 
                     entry = await cache.obtain(mod.file, fetch)
                     path = await cache.export_async(entry, Path(temporary.name) / str(index))
@@ -99,7 +114,7 @@ async def prepare_resolution(
             ),
             cancellation,
         )
-        return PreparedInstallation(plan, manager, temporary, replace_existing)
+        return PreparedInstallation(plan, manager, temporary, replace_existing, tuple(source_notes))
     except BaseException:
         temporary.cleanup()
         raise

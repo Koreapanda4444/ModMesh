@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QMainWindow,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QStackedWidget,
     QTextEdit,
@@ -161,8 +162,13 @@ class MainWindow(QMainWindow):
             self.start_work,
             self.search_panel.details,
             self._installation_changed,
+            self.search_panel.rematch,
         )
-        self.search_panel.split.addWidget(self.mod_details)
+        details_scroll = QScrollArea()
+        details_scroll.setWidgetResizable(True)
+        details_scroll.setWidget(self.mod_details)
+        self.search_panel.split.addWidget(details_scroll)
+        self.search_panel.split.setSizes([570, 420])
         self.search_panel.selected.connect(self.mod_details.select)
         self.pages.addWidget(self.search_panel)
         self.navigation.addItem("모드 탐색")
