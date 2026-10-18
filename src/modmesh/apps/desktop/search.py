@@ -4,6 +4,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
+from typing import Protocol
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
@@ -29,10 +30,17 @@ from modmesh.core.sources import SearchRequest, SearchSort
 from modmesh.domain.models import GameInstallation, SourceProject
 from modmesh.storage.metadata import MetadataStore
 
-type WorkStarter = Callable[
-    [Callable[[threading.Event], object], Callable[[object], None], Callable[[str], None] | None],
-    Worker,
-]
+
+class WorkStarter(Protocol):
+    def __call__(
+        self,
+        work: Callable[[threading.Event], object],
+        completed: Callable[[object], None],
+        failed: Callable[[str], None] | None = None,
+        *,
+        name: str = "작업",
+        retry: Callable[[], None] | None = None,
+    ) -> Worker: ...
 
 
 @dataclass(frozen=True)
@@ -223,6 +231,8 @@ class SearchPanel(QWidget):
             lambda cancelled: run_async(execute(), cancelled),
             partial(self._loaded, generation),
             partial(self._failed, generation),
+            name="통합 검색",
+            retry=self.search,
         )
 
     def _failed(self, generation: int, message: str) -> None:

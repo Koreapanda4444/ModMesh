@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 
 from modmesh.apps.desktop.search import WorkStarter
 from modmesh.apps.desktop.widgets import fill_row, table
-from modmesh.apps.desktop.workers import Worker, run_async
+from modmesh.apps.desktop.workers import Worker, report_progress, run_async
 from modmesh.apps.operations import PreparedInstallation, prepare_resolution
 from modmesh.apps.runtime import source_priorities, source_registry
 from modmesh.core.config import ClientSettings
@@ -243,6 +243,8 @@ class ModDetails(QWidget):
             lambda cancelled: run_async(execute(), cancelled),
             partial(self._loaded, generation),
             partial(self._failed, generation),
+            name="모드 상세 조회",
+            retry=self.load_variant,
         )
 
     def _loaded(self, generation: int, value: object) -> None:
@@ -383,12 +385,17 @@ class ModDetails(QWidget):
                         prefix=prefix,
                         replace_existing=replace,
                         cancelled=cancelled,
+                        progress=report_progress,
                     )
 
             return run_async(execute(), cancelled)
 
         self.worker = self.start(
-            work, partial(self._prepared, generation), partial(self._failed, generation)
+            work,
+            partial(self._prepared, generation),
+            partial(self._failed, generation),
+            name="설치 계획 준비",
+            retry=self.prepare_selected,
         )
 
     def _prepared(self, generation: int, value: object) -> None:
@@ -424,12 +431,16 @@ class ModDetails(QWidget):
                     prepared.plan.fingerprint,
                     replace_existing=prepared.replace_existing,
                     cancelled=cancelled.is_set,
+                    progress=report_progress,
                 )
             finally:
                 prepared.close()
 
         self.worker = self.start(
-            work, partial(self._applied, generation), partial(self._failed, generation)
+            work,
+            partial(self._applied, generation),
+            partial(self._apply_failed, generation),
+            name="설치 적용",
         )
 
     def _apply_failed(self, generation: int, message: str) -> None:

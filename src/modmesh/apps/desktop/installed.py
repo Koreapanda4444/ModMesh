@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 
 from modmesh.apps.desktop.search import WorkStarter
 from modmesh.apps.desktop.widgets import fill_row, table
-from modmesh.apps.desktop.workers import Worker, run_async
+from modmesh.apps.desktop.workers import Worker, report_progress, run_async
 from modmesh.apps.runtime import source_registry
 from modmesh.core.config import ClientSettings
 from modmesh.core.games import GameRegistry
@@ -174,6 +174,8 @@ class InstalledPanel(QWidget):
             ),
             partial(self._loaded, generation),
             partial(self._failed, generation),
+            name="설치 파일 점검",
+            retry=self.refresh,
         )
 
     def _failed(self, generation: int, message: str) -> None:
@@ -282,6 +284,8 @@ class InstalledPanel(QWidget):
             lambda cancelled: run_async(execute(), cancelled),
             partial(self._updates, generation),
             partial(self._failed, generation),
+            name="호환 버전 조회",
+            retry=self.check_versions,
         )
 
     def _updates(self, generation: int, value: object) -> None:
@@ -326,6 +330,8 @@ class InstalledPanel(QWidget):
             lambda cancelled: manager.plan_removal(references),
             partial(self._removal_ready, generation, manager),
             partial(self._failed, generation),
+            name="제거 계획 준비",
+            retry=self.prepare_removal,
         )
 
     def _removal_ready(self, generation: int, manager: RemovalManager, value: object) -> None:
@@ -345,9 +351,12 @@ class InstalledPanel(QWidget):
         self._buttons(False)
         self.status.setText("승인한 제거 계획을 적용하고 있습니다…")
         self.worker = self.start(
-            lambda cancelled: manager.remove(plan, plan.fingerprint, cancelled=cancelled.is_set),
+            lambda cancelled: manager.remove(
+                plan, plan.fingerprint, cancelled=cancelled.is_set, progress=report_progress
+            ),
             self._removed,
             self._remove_failed,
+            name="제거 적용",
         )
 
     def _removed(self, value: object) -> None:

@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 from modmesh import __version__
 from modmesh.apps.desktop.details import ModDetails
 from modmesh.apps.desktop.installed import InstalledPanel
+from modmesh.apps.desktop.jobs import JobsPanel
 from modmesh.apps.desktop.search import SearchPanel
 from modmesh.apps.desktop.widgets import fill_row, table
 from modmesh.apps.desktop.workers import Worker
@@ -67,6 +68,7 @@ class MainWindow(QMainWindow):
         self.context = context or DiscoveryContext(current_platform(), environment=os.environ)
         self.records: tuple[DiscoveryRecord, ...] = ()
         self.workers: set[Worker] = set()
+        self.closing = False
         self.discovery_done = False
         self.setWindowTitle("ModMesh")
         self.resize(1240, 780)
@@ -169,6 +171,9 @@ class MainWindow(QMainWindow):
         )
         self.pages.addWidget(self.installed_panel)
         self.navigation.addItem("설치된 모드")
+        self.jobs = JobsPanel(self.games, self.start_work)
+        self.pages.addWidget(self.jobs)
+        self.navigation.addItem("다운로드 / 작업")
         outer.addLayout(body, 1)
         self.setCentralWidget(content)
         self.navigation.setCurrentRow(0)
@@ -186,17 +191,26 @@ class MainWindow(QMainWindow):
         work: Callable[[threading.Event], object],
         completed: Callable[[object], None],
         failed: Callable[[str], None] | None = None,
+        *,
+        name: str = "작업",
+        retry: Callable[[], None] | None = None,
     ) -> Worker:
         worker = Worker(work)
+        worker.name = name
+        worker.always_start = name in {"설치 적용", "제거 적용"}
+        if self.closing:
+            worker.cancel()
         self.workers.add(worker)
         worker.succeeded.connect(completed)
         worker.failed.connect(failed or self.show_error)
         worker.finished.connect(lambda: self._worker_finished(worker))
-        worker.start()
+        self.jobs.enqueue(worker, name, retry)
         return worker
 
     def _worker_finished(self, worker: Worker) -> None:
         self.workers.discard(worker)
+        if not self.closing and worker.name in {"설치 적용", "제거 적용", "중단 작업 복구"}:
+            self.jobs.refresh_history()
         worker.deleteLater()
 
     def show_error(self, message: str) -> None:
@@ -229,7 +243,9 @@ class MainWindow(QMainWindow):
                     engine.register_manual(manual[0], manual[1], self.context)
                 return engine.discover(self.context, cancelled=cancelled.is_set)
 
-        self.start_work(work, self._discovered, self._discovery_failed)
+        self.start_work(
+            work, self._discovered, self._discovery_failed, name="게임 탐색", retry=self.discover
+        )
 
     def _discovery_failed(self, message: str) -> None:
         self.rescan.setEnabled(True)
@@ -314,6 +330,7 @@ class MainWindow(QMainWindow):
         self.search_panel.set_context(record.installation if record else None)
         self.mod_details.set_context(record.installation if record else None)
         self.installed_panel.set_context(record.installation if record else None)
+        self.jobs.set_context(record.installation if record else None)
         if record is None:
             self.game_details.setPlainText(
                 "탐지된 설치 경로가 없습니다. 게임과 OS 지원 범위를 확인하고 폴더를 등록하세요."
@@ -346,6 +363,7 @@ class MainWindow(QMainWindow):
         self.mod_details.select(group)
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self.closing = True
         if self.workers:
             for worker in self.workers:
                 worker.cancel()

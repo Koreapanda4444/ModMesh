@@ -13,14 +13,19 @@ from modmesh.core.diagnostics import ErrorCode, ModMeshError, redact_text
 class Worker(QThread):
     succeeded = Signal(object)
     failed = Signal(str)
+    progress = Signal(object)
 
     def __init__(self, work: Callable[[threading.Event], object]) -> None:
         super().__init__()
         self.work = work
+        self.name = "작업"
+        self.always_start = False
         self.cancelled = threading.Event()
 
     def run(self) -> None:
         try:
+            if self.cancelled.is_set() and not self.always_start:
+                raise ModMeshError(ErrorCode.CANCELLED, "Queued operation cancelled")
             self.succeeded.emit(self.work(self.cancelled))
         except ModMeshError as exc:
             self.failed.emit(json.dumps(exc.as_dict(), ensure_ascii=False, default=str))
@@ -49,3 +54,9 @@ def run_async[T](awaitable: Awaitable[T], cancelled: threading.Event) -> T:
             await asyncio.gather(task, return_exceptions=True)
 
     return asyncio.run(execute())
+
+
+def report_progress(event: object) -> None:
+    worker = QThread.currentThread()
+    if isinstance(worker, Worker):
+        worker.progress.emit(event)

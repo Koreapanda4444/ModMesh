@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -41,6 +42,7 @@ async def prepare_resolution(
     prefix: str = "",
     replace_existing: bool = False,
     cancelled: threading.Event | None = None,
+    progress: Callable[[object], None] | None = None,
 ) -> PreparedInstallation:
     report = analyze_dependencies(resolution)
     if report.blocked:
@@ -74,6 +76,7 @@ async def prepare_resolution(
                             registry,
                             source_priorities(settings.source_priorities),
                             destination,
+                            progress=progress,
                         ).wait()
 
                     entry = await cache.obtain(mod.file, fetch)
@@ -83,6 +86,8 @@ async def prepare_resolution(
                             mod, path, rule if mod.direct else None, prefix if mod.direct else ""
                         )
                     )
+        if progress is not None:
+            progress("검증한 파일의 변경 계획을 작성합니다.")
         manager = InstallationManager(create_game_registry(), installation)
         plan = await _blocking(
             partial(
