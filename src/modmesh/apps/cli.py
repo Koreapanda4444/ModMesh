@@ -21,6 +21,7 @@ from modmesh.core.downloads import DownloadManager, DownloadPolicy, DownloadProg
 from modmesh.core.games import DiscoveryContext
 from modmesh.core.identity import IdentityRegistry
 from modmesh.core.matching import ProjectMatcher
+from modmesh.core.resolver import DependencyResolver, ResolvedMod
 from modmesh.core.search import SearchState, UnifiedSearch
 from modmesh.core.sources import SearchRequest, SearchSort, VersionQuery
 from modmesh.domain.models import ModVersion
@@ -57,15 +58,17 @@ def main() -> int:
     download = commands.add_parser(
         "download", help="Download one pinned source file without installing it"
     )
-    for command in (versions, download):
+    resolve = commands.add_parser("resolve", help="Resolve required dependency versions")
+    for command in (versions, download, resolve):
         command.add_argument("--game", required=True)
         command.add_argument("--source", required=True)
         command.add_argument("--project", required=True, help="Exact project ID returned by search")
         command.add_argument("--game-version")
         command.add_argument("--loader")
     versions.add_argument("--limit", type=int, default=20)
-    download.add_argument("--version", required=True, help="Exact source version ID")
-    download.add_argument("--file", help="Exact file ID; required if no unique primary file exists")
+    for command in (download, resolve):
+        command.add_argument("--version", required=True, help="Exact source version ID")
+        command.add_argument("--file", help="Exact source file ID")
     download.add_argument(
         "--output",
         type=Path,
@@ -97,7 +100,7 @@ def main() -> int:
             return 0
         if args.command == "search":
             return asyncio.run(_search(args, settings))
-        if args.command in {"versions", "download"}:
+        if args.command in {"versions", "download", "resolve"}:
             return asyncio.run(_source_files(args, settings))
         context = DiscoveryContext(current_platform(), tuple(args.root), os.environ)
         with MetadataStore(settings.paths.database) as store:
@@ -204,6 +207,26 @@ async def _source_files(args: argparse.Namespace, settings: ClientSettings) -> i
             if len(primary) != 1:
                 raise ModMeshError(ErrorCode.VALIDATION, "Choose an exact --file ID")
             files = primary
+        if args.command == "resolve":
+            with MetadataStore(settings.paths.database) as store:
+                result = await DependencyResolver(
+                    registry,
+                    identities=IdentityRegistry(store),
+                    priorities=source_priorities(settings.source_priorities),
+                ).resolve(
+                    args.game,
+                    (ResolvedMod(project, version, files[0], True),),
+                    game_version=args.game_version,
+                    loader=args.loader,
+                )
+            payload = asdict(result)
+            for mod, resolved in zip(payload["mods"], result.mods, strict=True):
+                mod["file"].pop("download_url", None)
+                mod["version"] = _version_payload(resolved.version)
+            payload["solved"] = result.solved
+            payload["metadata_complete"] = result.metadata_complete
+            print(json.dumps(payload, ensure_ascii=False, default=str))
+            return 0 if result.solved else 1
         requested = ArtifactCandidate(project, version, files[0], args.game_version, args.loader)
         with ArtifactCache(settings.paths.cache_dir, max_bytes=settings.cache_max_bytes) as cache:
             async with DownloadManager(

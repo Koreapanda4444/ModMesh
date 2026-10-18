@@ -214,6 +214,15 @@ class ModrinthSource(SourceAdapter):
             raise ModMeshError(ErrorCode.NETWORK, "Modrinth returned versions of another project")
         return versions
 
+    async def version(self, game_id: str, version_id: str) -> ModVersion:
+        self.require(game_id, SourceCapability.VERSIONS)
+        version = _version(await self._client.get_json(f"version/{_native(version_id)}"))
+        if version.version_id != version_id:
+            raise ModMeshError(ErrorCode.INTEGRITY, "Modrinth version ID mismatch")
+        if version.project.project_id not in self._verified_projects:
+            await self.project(game_id, version.project.project_id)
+        return version
+
     async def dependencies(
         self, game_id: str, project_id: str, version_id: str
     ) -> tuple[Dependency, ...]:

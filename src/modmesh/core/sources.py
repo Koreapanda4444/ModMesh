@@ -153,6 +153,9 @@ class SourceAdapter(ABC):
             ErrorCode.UNSUPPORTED, "Version lookup is not implemented for this source"
         )
 
+    async def version(self, game_id: str, version_id: str) -> ModVersion:
+        raise ModMeshError(ErrorCode.UNSUPPORTED, "Native version lookup is unavailable")
+
     async def files(self, game_id: str, project_id: str) -> tuple[ModFile, ...]:
         self.require(game_id, SourceCapability.FILES)
         return tuple(
