@@ -15,6 +15,7 @@ from modmesh.apps.runtime import (
 from modmesh.core.artifact_matching import ArtifactCandidate
 from modmesh.core.cache import ArtifactCache
 from modmesh.core.config import ClientSettings, load_client_settings
+from modmesh.core.conflicts import analyze_dependencies
 from modmesh.core.diagnostics import ErrorCode, ModMeshError, configure_logging, redact
 from modmesh.core.discovery import DiscoveryEngine, current_platform
 from modmesh.core.downloads import DownloadManager, DownloadPolicy, DownloadProgress, DownloadResult
@@ -223,10 +224,13 @@ async def _source_files(args: argparse.Namespace, settings: ClientSettings) -> i
             for mod, resolved in zip(payload["mods"], result.mods, strict=True):
                 mod["file"].pop("download_url", None)
                 mod["version"] = _version_payload(resolved.version)
+            report = analyze_dependencies(result)
+            payload["conflicts"] = asdict(report)
+            payload["blocked"] = report.blocked
             payload["solved"] = result.solved
             payload["metadata_complete"] = result.metadata_complete
             print(json.dumps(payload, ensure_ascii=False, default=str))
-            return 0 if result.solved else 1
+            return 0 if result.solved and not report.blocked else 1
         requested = ArtifactCandidate(project, version, files[0], args.game_version, args.loader)
         with ArtifactCache(settings.paths.cache_dir, max_bytes=settings.cache_max_bytes) as cache:
             async with DownloadManager(
