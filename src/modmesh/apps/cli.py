@@ -15,10 +15,11 @@ from modmesh.apps.runtime import (
     source_registry,
 )
 from modmesh.core.artifact_matching import ArtifactCandidate
+from modmesh.core.cache import ArtifactCache
 from modmesh.core.config import ClientSettings, load_client_settings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError, configure_logging, redact
 from modmesh.core.discovery import DiscoveryEngine, current_platform
-from modmesh.core.downloads import DownloadManager, DownloadProgress
+from modmesh.core.downloads import DownloadManager, DownloadPolicy, DownloadProgress, DownloadResult
 from modmesh.core.games import DiscoveryContext
 from modmesh.core.identity import IdentityRegistry
 from modmesh.core.matching import ProjectMatcher
@@ -70,16 +71,32 @@ def main() -> int:
     download.add_argument(
         "--output",
         type=Path,
-        required=True,
-        help="Destination file; existing entries are never overwritten",
+        help="Export a separate copy; otherwise return the verified cache path",
     )
     download.add_argument("--progress", action="store_true", help="Emit progress JSON to stderr")
+    cache_command = commands.add_parser("cache", help="Inspect or safely clean owned cache objects")
+    cache_command.add_argument("action", choices=("info", "verify", "prune", "clear"))
     args = parser.parse_args()
     if args.command == "discover" and args.path is not None and args.game is None:
         parser.error("--path requires --game")
     try:
         settings = load_client_settings(args.config)
         configure_logging(level=settings.log_level)
+        if args.command == "cache":
+            with ArtifactCache(
+                settings.paths.cache_dir, max_bytes=settings.cache_max_bytes
+            ) as cache:
+                if args.action == "verify":
+                    payload = cache.verify()
+                else:
+                    info = (
+                        cache.info()
+                        if args.action == "info"
+                        else cache.prune(clear=args.action == "clear")
+                    )
+                    payload = asdict(info)
+                print(json.dumps(payload, ensure_ascii=False))
+            return 0
         if args.command == "search":
             return asyncio.run(_search(args, settings))
         if args.command in {"versions", "download"}:
@@ -190,16 +207,28 @@ async def _source_files(args: argparse.Namespace, settings: ClientSettings) -> i
                 raise ModMeshError(ErrorCode.VALIDATION, "Choose an exact --file ID")
             files = primary
         requested = ArtifactCandidate(project, version, files[0], args.game_version, args.loader)
-        async with DownloadManager(DOWNLOAD_DOMAINS) as manager:
-            result = await manager.submit_candidate(
-                requested,
-                (),
-                registry,
-                source_priorities(settings.source_priorities),
-                args.output,
-                progress=_progress if args.progress else None,
-            ).wait()
-        print(json.dumps(asdict(result), ensure_ascii=False, default=str))
+        with ArtifactCache(settings.paths.cache_dir, max_bytes=settings.cache_max_bytes) as cache:
+            async with DownloadManager(
+                DOWNLOAD_DOMAINS,
+                policy=DownloadPolicy(max_bytes=min(8 * 1024**3, settings.cache_max_bytes)),
+            ) as manager:
+
+                async def fetch(destination: Path) -> DownloadResult:
+                    return await manager.submit_candidate(
+                        requested,
+                        (),
+                        registry,
+                        source_priorities(settings.source_priorities),
+                        destination,
+                        progress=_progress if args.progress else None,
+                    ).wait()
+
+                entry = await cache.obtain(files[0], fetch)
+                output = await cache.export_async(entry, args.output) if args.output else entry.path
+                payload = asdict(entry)
+                payload["path"] = output
+                payload["source_verification"] = entry.artifact.source_verification
+        print(json.dumps(payload, ensure_ascii=False, default=str))
         return 0
 
 

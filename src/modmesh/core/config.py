@@ -82,11 +82,13 @@ class ClientSettings:
     paths: AppPaths
     server_url: str | None = None
     log_level: str = "INFO"
+    cache_max_bytes: int = 5 * 1024**3
     source_priorities: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "server_url", validate_server_url(self.server_url))
         _log_level(self.log_level)
+        _cache_limit(self.cache_max_bytes)
         object.__setattr__(
             self, "source_priorities", MappingProxyType(_source_priorities(self.source_priorities))
         )
@@ -167,10 +169,17 @@ def load_client_settings(
     data = _section(
         path,
         "client",
-        {"data_dir", "cache_dir", "server_url", "log_level", "source_priorities"},
+        {
+            "data_dir",
+            "cache_dir",
+            "cache_max_bytes",
+            "server_url",
+            "log_level",
+            "source_priorities",
+        },
         required=explicit,
     )
-    for key in ("data_dir", "cache_dir", "server_url", "log_level"):
+    for key in ("data_dir", "cache_dir", "cache_max_bytes", "server_url", "log_level"):
         if (name := f"MODMESH_{key.upper()}") in env:
             data[key] = env[name]
 
@@ -189,8 +198,17 @@ def load_client_settings(
         ),
         server_url=_string(data, "server_url", None),
         log_level=_log_level(_string(data, "log_level", "INFO") or "INFO"),
+        cache_max_bytes=_cache_limit(data.get("cache_max_bytes", 5 * 1024**3)),
         source_priorities=_source_priorities(data.get("source_priorities", {})),
     )
+
+
+def _cache_limit(value: object) -> int:
+    if isinstance(value, str) and value.isascii() and value.isdecimal() and len(value) <= 20:
+        value = int(value)
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 1024**5:
+        raise ConfigurationError("Cache capacity must be an integer from 1 byte to 1 PiB")
+    return value
 
 
 def _source_priorities(value: object) -> dict[str, tuple[str, ...]]:

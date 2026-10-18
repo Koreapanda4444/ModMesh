@@ -3,14 +3,18 @@
 import asyncio
 import hashlib
 import logging
+import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import httpx
 
+from modmesh.core.cache import ArtifactCache
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
-from modmesh.core.downloads import DownloadManager, DownloadPolicy, DownloadState
+from modmesh.core.downloads import DownloadManager, DownloadPolicy, DownloadResult, DownloadState
+from modmesh.core.hashing import verify_file
 from modmesh.core.sources import DownloadAccess, DownloadMode
 from modmesh.domain.artifacts import FileHash, HashAlgorithm
 from modmesh.domain.models import ModFile, SourceRef
@@ -143,12 +147,141 @@ async def check_downloads(root: Path) -> None:
     assert not list(root.glob(".modmesh-*.part"))
 
 
+async def check_cache(root: Path) -> None:
+    fetches = 0
+
+    async def fetch(path: Path) -> DownloadResult:
+        nonlocal fetches
+        fetches += 1
+        await asyncio.sleep(0.01)
+        path.write_bytes(DATA)
+        return DownloadResult(
+            path, verify_file(path, FILE.hashes), "example", FILE.file_id, "example", "job"
+        )
+
+    cache_dir = root / "cache"
+    with ArtifactCache(cache_dir, max_bytes=len(DATA) * 2) as cache:
+        first, second = await asyncio.gather(cache.obtain(FILE, fetch), cache.obtain(FILE, fetch))
+        assert fetches == 1 and first.path == second.path
+        assert {first.cache_hit, second.cache_hit} == {True, False}
+        exported = await cache.export_async(first, root / "export.bin")
+        exported.write_bytes(b"user edited export")
+        assert first.path.read_bytes() == DATA
+        try:
+            await cache.export_async(first, exported)
+        except ModMeshError as exc:
+            assert exc.code == ErrorCode.CONFLICT
+        else:
+            raise AssertionError("Cache export overwrote a user file")
+        # Equal expected strong hashes deduplicate across native source IDs.
+        alias = replace(FILE, project=SourceRef("other", "project"), file_id="other-file")
+        assert (await cache.obtain(alias, fetch)).cache_hit and fetches == 1
+        changed = replace(FILE, hashes=(FileHash(HashAlgorithm.SHA256, "0" * 64),))
+        assert cache.lookup(changed) is None and first.path.read_bytes() == DATA
+        first.path.write_bytes(b"corrupt")
+        assert cache.lookup(FILE) is None and not first.path.exists()
+        repaired = await cache.obtain(FILE, fetch)
+        assert not repaired.cache_hit and fetches == 2
+        # Replacement inodes and unknown files belong to the user, even in the namespace.
+        replacement = root / "replacement"
+        replacement.write_bytes(b"user replacement")
+        repaired.path.unlink()
+        replacement.rename(repaired.path)
+        assert cache.lookup(FILE) is None and repaired.path.read_bytes() == b"user replacement"
+        unknown = cache.root / "objects" / ("f" * 64)
+        unknown.write_bytes(b"unindexed user file")
+        assert cache.prune(clear=True).bytes == 0
+        assert (
+            unknown.read_bytes() == b"unindexed user file"
+            and repaired.path.read_bytes() == b"user replacement"
+        )
+        assert exported.read_bytes() == b"user edited export"
+    unowned = root / "unowned" / "modmesh-cache-v1"
+    unowned.mkdir(parents=True)
+    (unowned / "keep").write_bytes(b"user data")
+    try:
+        ArtifactCache(unowned.parent)
+    except ModMeshError as exc:
+        assert exc.code == ErrorCode.CONFLICT
+    else:
+        raise AssertionError("Nonempty namespace was adopted")
+    assert (unowned / "keep").read_bytes() == b"user data"
+    # Capacity eviction removes only the older indexed artifact.
+    with ArtifactCache(root / "quota", max_bytes=len(DATA)) as cache:
+        old = await cache.obtain(FILE, fetch)
+        content = b"new artifact"
+        new_file = replace(
+            FILE,
+            file_id="file-2",
+            size=len(content),
+            hashes=(FileHash(HashAlgorithm.SHA256, hashlib.sha256(content).hexdigest()),),
+        )
+
+        async def fetch_new(path: Path) -> DownloadResult:
+            path.write_bytes(content)
+            return DownloadResult(
+                path, verify_file(path, new_file.hashes), "example", "file-2", "example", "job"
+            )
+
+        new = await cache.obtain(new_file, fetch_new)
+        assert not old.path.exists() and new.path.read_bytes() == content
+        assert cache.info().bytes <= len(DATA)
+        new.path.write_bytes(b"invalid")
+        assert cache.verify() == {"checked": 1, "corrupt_removed": 1}
+        assert cache.info().bytes == 0
+
+
+async def cache_worker(root: Path) -> None:
+    with ArtifactCache(root) as cache:
+
+        async def fetch(path: Path) -> DownloadResult:
+            with (root / "fetch-once").open("xb") as count:
+                count.write(b"1")
+            await asyncio.sleep(0.2)
+            path.write_bytes(DATA)
+            return DownloadResult(
+                path, verify_file(path, FILE.hashes), "example", FILE.file_id, "example", "job"
+            )
+
+        entry = await cache.obtain(FILE, fetch)
+        assert entry.path.read_bytes() == DATA
+        print(entry.cache_hit)
+
+
+async def check_processes(root: Path) -> None:
+    with ArtifactCache(root):
+        pass
+    children = [
+        subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), "--cache-worker", str(root)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for _ in range(2)
+    ]
+    try:
+        results = [await asyncio.to_thread(child.communicate, timeout=20) for child in children]
+        assert all(child.returncode == 0 for child in children), results
+        assert sorted(output.strip() for output, error in results) == ["False", "True"], results
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+            child.wait()
+
+
 async def main() -> None:
     logging.disable(logging.CRITICAL)
     with TemporaryDirectory(prefix="modmesh-safety-") as name:
         await asyncio.wait_for(check_downloads(Path(name)), timeout=20)
-    print("Download safety checks passed")
+        await asyncio.wait_for(check_cache(Path(name)), timeout=20)
+        await check_processes(Path(name) / "processes")
+    print("Download and cache safety checks passed")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    if len(sys.argv) == 3 and sys.argv[1] == "--cache-worker":
+        asyncio.run(cache_worker(Path(sys.argv[2])))
+    else:
+        asyncio.run(main())

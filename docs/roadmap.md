@@ -1,6 +1,6 @@
 # 개발 로드맵
 
-기준: [최종 Python 개발계획서](development-plan.md). 완료는 실제 검증 범위에 한합니다.
+기준: [최종 Python 개발계획서](development-plan.md). 현재 구현 범위는 01~24이며, 완료는 [실제 검증 범위](verification.md)에 한합니다. 실게임/인증 API 미검증 항목은 완료로 표시하지 않습니다. 25번 이후의 의존성 해결·설치·관리 UI·계정/서버·팩 기능은 아직 구현하지 않았습니다.
 
 | 번호 | 상태 | 커밋 | 내용 |
 |---|---|---|---|
@@ -27,7 +27,7 @@
 | 21 | 완료 | `feat: add identical artifact merging` | 확인된 동일 해시 파일 병합. |
 | 22 | 완료 | `feat: add per-game source priorities` | 게임별 출처 우선순위와 fallback. |
 | 23 | 완료 | `feat: add mod download manager` | 취소·재시도·진행률·다운로드 큐. |
-| 24 | 예정 | `feat: add hash verified mod cache` | 검증 캐시 재사용 및 정리. |
+| 24 | 완료 | `feat: add hash verified mod cache` | 검증 캐시 재사용 및 정리. |
 | 25 | 예정 | `feat: add dependency resolver` | 버전 제약/필수 의존성 해결. |
 | 26 | 예정 | `feat: add dependency conflict detection` | 충돌·누락·순환·로더 호환성. |
 | 27 | 예정 | `feat: add mod installation planner` | 설치 전 파일 변경 계획. |

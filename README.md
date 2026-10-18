@@ -4,7 +4,7 @@
 
 ## 개발 상태
 
-01~23번을 구현했습니다. 공통 코어, Palworld 탐지, 배포처 연동, 통합 검색과 검증 다운로드를 CLI로 사용할 수 있습니다. PySide6는 기본 창, FastAPI는 health 엔드포인트까지입니다. 설치·관리 화면·계정·팩 기능은 후속 단계이며, 실게임/인증 API의 미검증 항목은 [검증 범위](docs/verification.md)에 명시했습니다.
+01~24번을 구현했습니다. 공통 코어, Palworld 탐지, 배포처 연동, 통합 검색·검증 다운로드·캐시를 CLI로 사용할 수 있습니다. PySide6는 기본 창, FastAPI는 health 엔드포인트까지입니다. 설치·관리 화면·계정·팩 기능은 후속 단계이며, 실게임/인증 API의 미검증 항목은 [검증 범위](docs/verification.md)에 명시했습니다.
 
 ## 개발 환경
 
@@ -20,8 +20,8 @@ py -3.12 -m venv .venv
 Linux 개발 환경에서는 `.venv/bin/python`, `.venv/bin/modmesh`를 사용합니다. Linux/macOS 제품 지원이나 Windows 독립 실행 패키지는 아직 검증하지 않았습니다.
 
 ```powershell
-.venv\Scripts\python -m ruff check src
-.venv\Scripts\python -m ruff format --check src
+.venv\Scripts\python -m ruff check src tools
+.venv\Scripts\python -m ruff format --check src tools
 .venv\Scripts\python -m mypy
 .venv\Scripts\python -m pip wheel --no-deps --no-build-isolation -w dist .
 .venv\Scripts\modmesh --check
@@ -43,7 +43,7 @@ Linux 개발 환경에서는 `.venv/bin/python`, `.venv/bin/modmesh`를 사용�
 
 `modmesh --config <TOML 경로>` 또는 `MODMESH_CONFIG`로 클라이언트 설정을 지정합니다. 기본 파일은 Windows의 `%APPDATA%/ModMesh/config.toml`입니다. 파일이 없으면 로컬 기본값을 사용합니다.
 
-`[client]`에는 `data_dir`, `cache_dir`, `server_url`, `log_level`을 지정할 수 있습니다. `MODMESH_DATA_DIR`, `MODMESH_CACHE_DIR`, `MODMESH_SERVER_URL`, `MODMESH_LOG_LEVEL` 환경 변수가 파일보다 우선합니다. 상대 경로는 설정 파일 기준입니다. 서버 URL은 HTTPS 또는 로컬 개발용 loopback HTTP만 허용합니다. 공식 서버 없이 로컬 앱을 실행할 수 있습니다.
+`[client]`에는 `data_dir`, `cache_dir`, `cache_max_bytes`, `server_url`, `log_level`을 지정할 수 있습니다. `MODMESH_DATA_DIR`, `MODMESH_CACHE_DIR`, `MODMESH_CACHE_MAX_BYTES`, `MODMESH_SERVER_URL`, `MODMESH_LOG_LEVEL` 환경 변수가 파일보다 우선합니다. 상대 경로는 설정 파일 기준입니다. 서버 URL은 HTTPS 또는 로컬 개발용 loopback HTTP만 허용합니다. 공식 서버 없이 로컬 앱을 실행할 수 있습니다.
 
 서버는 `--config`/`MODMESH_SERVER_CONFIG`의 `[server]` 섹션과 `MODMESH_BIND_HOST`, `MODMESH_BIND_PORT`, `MODMESH_ENV`, `MODMESH_DATABASE_URL`을 사용합니다. DB 자격 증명은 환경 변수로 전달하세요. 현재 health API는 DB 없이 실행하며, 실제 계정·팩 DB 연결은 서버 단계에서 구현합니다.
 
@@ -86,3 +86,19 @@ CurseForge는 승인된 `MODMESH_CURSEFORGE_API_KEY`로 Minecraft Java 모드 AP
 ```
 
 `versions`가 반환한 정확한 출처 버전/파일 ID를 사용합니다. 파일이 여러 개이고 primary가 유일하지 않으면 `--file`로 선택해야 합니다. 다운로드는 설치를 실행하지 않습니다. 큐·동시 실행 제한·진행률·취소·일시 오류 재시도와 출처 허용 CDN 범위를 적용합니다. 기존 대상 파일은 덮어쓰지 않으며 임시 파일에서 모든 제공 체크섬과 크기를 검증한 뒤 게시합니다. 출처 해시가 없으면 `unverified`, MD5/SHA-1만 있으면 `weak`입니다. API 인증 헤더를 CDN으로 전달하지 않습니다. 직접 다운로드 권한이 없으면 공식 외부 흐름 안내를 반환합니다.
+
+## 검증 캐시
+
+다운로드는 설정한 캐시에 SHA-256으로 저장하고 요청된 출처의 모든 체크섬과 크기를 재검증한 뒤 재사용합니다. 동일한 출처 파일/공통 강한 해시 요청에는 프로세스 간 잠금을 사용합니다. `--output`을 생략하면 캐시 경로를 반환하며, 지정하면 독립된 복사본으로 내보냅니다. 캐시 경로는 정리 시 사라질 수 있으므로 보관할 파일은 내보내세요. 캐시 적중 시에도 CLI의 버전·권한 메타데이터 조회에는 네트워크/배포처 인증이 필요할 수 있습니다.
+
+```powershell
+.venv\Scripts\modmesh-cli cache info
+.venv\Scripts\modmesh-cli cache verify
+.venv\Scripts\modmesh-cli cache prune
+.venv\Scripts\modmesh-cli cache clear
+.venv\Scripts\python tools/verify_safety.py
+```
+
+기본 용량은 콘텐츠 **5 GiB**이며 `[client].cache_max_bytes` 또는 `MODMESH_CACHE_MAX_BYTES`에서 바이트 단위로 바꿉니다. 새 콘텐츠를 넣거나 재사용할 때 제한을 적용하고 오래 사용하지 않은 항목부터 정리합니다. `prune`은 현재 제한까지, `clear`는 추적 중인 콘텐츠 전체를 정리합니다. 파일 손상이 발견되면 재사용하지 않으며 `verify`로 전체 검사할 수 있습니다.
+
+캐시는 지정 경로 아래 `modmesh-cache-v1` 전용 공간을 사용합니다. 소유 표시 없는 비어 있지 않은 공간은 채택하지 않고, DB 기록과 inode 소유 근거가 맞는 콘텐츠만 삭제합니다. 미등록 파일·다른 inode로 교체된 파일·심볼릭 링크는 보존합니다. 갑작스러운 종료로 남은 미등록 임시 파일도 소유를 추측해 삭제하지 않습니다. 용량 수치는 관리하는 콘텐츠에 대한 값이며 이 미등록 파일과 인덱스/잠금 파일은 제외됩니다. API 키나 다운로드 URL은 캐시 인덱스에 저장하지 않습니다. 안전한 게시를 위해 하드 링크와 안정적인 파일 식별을 지원하는 파일시스템이 필요합니다(Windows CI는 NTFS).
