@@ -29,3 +29,4 @@ typing_extensions==4.16.0
 uvicorn==0.54.0
 wheel==0.45.1
 socksio==1.0.0
+psutil==7.2.2

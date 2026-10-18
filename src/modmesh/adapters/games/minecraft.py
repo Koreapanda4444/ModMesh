@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Iterable
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
+from modmesh.adapters.games.minecraft_mods import JarMetadata, read_jar, validate_native
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.games import (
     DiscoveryContext,
@@ -14,15 +16,19 @@ from modmesh.core.games import (
     EnvironmentReport,
     GameAdapter,
     GameCapability,
+    InstallRule,
     ModLocation,
 )
 from modmesh.core.planning import portable_path, target_path
+from modmesh.core.processes import java_guard
 from modmesh.domain.models import (
     Game,
     GameInstallation,
     GameVersion,
     InstalledFile,
     InstalledMod,
+    Loader,
+    ModFile,
     Platform,
 )
 
@@ -141,7 +147,13 @@ class InstanceMetadata:
 class MinecraftAdapter(GameAdapter):
     game = Game("minecraft", "Minecraft Java Edition", ("java",), frozenset(Platform))
     capabilities = frozenset(
-        {GameCapability.DISCOVERY, GameCapability.VERSION, GameCapability.MOD_DISCOVERY}
+        {
+            GameCapability.DISCOVERY,
+            GameCapability.VERSION,
+            GameCapability.MOD_DISCOVERY,
+            GameCapability.INSTALL_RULES,
+            GameCapability.REMOVAL_RULES,
+        }
     )
 
     def __init__(self, roots: tuple[Path, ...] = ()) -> None:
@@ -247,12 +259,58 @@ class MinecraftAdapter(GameAdapter):
             )
         return None
 
+    def loader(self, metadata: InstanceMetadata) -> Loader | None:
+        mapping = {
+            "net.fabricmc.fabric-loader": "fabric",
+            "net.minecraftforge": "forge",
+            "net.neoforged": "neoforge",
+        }
+        if metadata.components:
+            component_values = {
+                (mapping[str(item["uid"])], version_id(item.get("version")))
+                for item in metadata.components
+                if item.get("uid") in mapping
+            }
+            if len(component_values) == 1:
+                name, version = next(iter(component_values))
+                return Loader(name, version)
+            return None
+        results: set[Loader | None] = set()
+        for chain in metadata.chains:
+            values: set[Loader] = set()
+            for record in chain:
+                libraries = record.get("libraries", [])
+                if not isinstance(libraries, list) or len(libraries) > 10000:
+                    raise ModMeshError(ErrorCode.VALIDATION, "Invalid game library metadata")
+                for library in libraries:
+                    if not isinstance(library, dict) or not isinstance(library.get("name"), str):
+                        raise ModMeshError(ErrorCode.VALIDATION, "Invalid game library entry")
+                    parts = library["name"].split(":")
+                    if len(parts) < 3:
+                        continue
+                    group, artifact, version = parts[:3]
+                    if (group, artifact) == ("net.fabricmc", "fabric-loader"):
+                        values.add(Loader("fabric", version_id(version)))
+                    elif (group, artifact) == ("net.neoforged", "neoforge"):
+                        values.add(Loader("neoforge", version_id(version)))
+                    elif (group, artifact) == ("net.minecraftforge", "forge"):
+                        prefix = (metadata.version.value or "") + "-"
+                        if version.startswith(prefix):
+                            values.add(Loader("forge", version_id(version[len(prefix) :])))
+            results.add(next(iter(values)) if len(values) == 1 else None)
+        return next(iter(results)) if len(results) == 1 else None
+
     def inspect(self, path: Path, platform: Platform) -> GameInstallation | None:
         metadata = self.metadata(path, platform)
         if metadata is None:
             return None
         return GameInstallation(
-            self.game.game_id, metadata.path, "java", platform, metadata.version
+            self.game.game_id,
+            metadata.path,
+            "java",
+            platform,
+            metadata.version,
+            self.loader(metadata),
         )
 
     def validate(self, installation: GameInstallation) -> EnvironmentReport:
@@ -266,11 +324,14 @@ class MinecraftAdapter(GameAdapter):
             issues.append(
                 EnvironmentIssue("changed_instance", "Minecraft instance version changed", True)
             )
-        issues.append(
-            EnvironmentIssue(
-                "loader_unverified", "Loader support is not verified for this instance"
+        if metadata is not None and self.loader(metadata) != installation.loader:
+            issues.append(EnvironmentIssue("changed_loader", "Instance loader changed", True))
+        if installation.loader is None:
+            issues.append(
+                EnvironmentIssue(
+                    "loader_unverified", "No single supported mod loader is identified"
+                )
             )
-        )
         issues.append(
             EnvironmentIssue(
                 "game_launch_unverified",
@@ -278,6 +339,128 @@ class MinecraftAdapter(GameAdapter):
             )
         )
         return EnvironmentReport(tuple(issues))
+
+    def validate_operation(self, installation: GameInstallation) -> EnvironmentReport:
+        return java_guard(installation.path)
+
+    def installation_rules(
+        self, installation: GameInstallation, file: ModFile
+    ) -> tuple[InstallRule, ...]:
+        loader = installation.loader
+        if (
+            loader is None
+            or loader.version is None
+            or installation.version.value is None
+            or loader.name not in {"fabric", "forge", "neoforge"}
+            or not file.filename.casefold().endswith(".jar")
+        ):
+            return ()
+        return (InstallRule("minecraft-" + loader.name, "mods", "file", frozenset({".jar"})),)
+
+    def removal_rules(self, installation: GameInstallation) -> tuple[InstallRule, ...]:
+        return (InstallRule("minecraft-managed", "mods", "file", frozenset({".jar"})),)
+
+    def _jars(
+        self, installation: GameInstallation, excluded: frozenset[str]
+    ) -> tuple[tuple[tuple[str, JarMetadata], ...], tuple[EnvironmentIssue, ...]]:
+        directory = target_path(installation.path, "mods")
+        jars = []
+        issues = []
+        if directory.is_dir():
+            for index, path in enumerate(directory.iterdir()):
+                if index >= 4096:
+                    raise ModMeshError(ErrorCode.VALIDATION, "Minecraft mod scan limit reached")
+                relative = path.relative_to(installation.path).as_posix()
+                if relative.casefold() in excluded or not path.name.casefold().endswith(".jar"):
+                    continue
+                try:
+                    jars.append(
+                        (
+                            relative,
+                            read_jar(
+                                path, installation.loader.name if installation.loader else None
+                            ),
+                        )
+                    )
+                except (OSError, ModMeshError):
+                    issues.append(
+                        EnvironmentIssue(
+                            "external_jar_unverified",
+                            f"External JAR could not be verified: {path.name}",
+                        )
+                    )
+        return tuple(jars), tuple(issues)
+
+    def validate_artifacts(
+        self, installation: GameInstallation, files: tuple[tuple[ModFile, Path], ...]
+    ) -> EnvironmentReport:
+        loader = installation.loader
+        if loader is None:
+            return EnvironmentReport(
+                (EnvironmentIssue("missing_loader", "A supported loader must be identified", True),)
+            )
+        excluded = frozenset(("mods/" + file.filename).casefold() for file, _ in files)
+        jars, warnings = self._jars(installation, excluded)
+        selected = []
+        issues = list(warnings)
+        for file, path in files:
+            try:
+                metadata = read_jar(path, loader.name)
+                if (
+                    loader.name == "neoforge"
+                    and metadata.metadata_file != "META-INF/neoforge.mods.toml"
+                    and not (loader.version or "").startswith("20.4.")
+                ):
+                    raise ModMeshError(
+                        ErrorCode.UNSUPPORTED, "This NeoForge version requires neoforge.mods.toml"
+                    )
+                selected.append(("mods/" + file.filename, metadata))
+            except ModMeshError as exc:
+                issues.append(
+                    EnvironmentIssue("invalid_mod_jar", f"{file.filename}: {exc.message}", True)
+                )
+        return EnvironmentReport(
+            (*issues, *validate_native(installation, (*jars, *selected)).issues)
+        )
+
+    def validate_removal(
+        self,
+        installation: GameInstallation,
+        paths: tuple[str, ...],
+        restored: tuple[Path, ...] = (),
+    ) -> EnvironmentReport:
+        before, warnings = self._jars(installation, frozenset())
+        after = tuple(
+            (path, jar)
+            for path, jar in before
+            if path.casefold() not in {value.casefold() for value in paths}
+        )
+        restored_jars = tuple(
+            (
+                f"restored-{index}",
+                read_jar(path, installation.loader.name if installation.loader else None),
+            )
+            for index, path in enumerate(restored)
+        )
+        after = (*after, *restored_jars)
+        previous = {
+            identity
+            for _, jar in before
+            for mod in jar.mods
+            for identity in (mod.mod_id, *mod.aliases)
+        }
+        remaining = {
+            identity
+            for _, jar in after
+            for mod in jar.mods
+            for identity in (mod.mod_id, *mod.aliases)
+        }
+        return EnvironmentReport(
+            (
+                *warnings,
+                *validate_native(installation, after, lost=frozenset(previous - remaining)).issues,
+            )
+        )
 
     def mod_locations(self, installation: GameInstallation) -> tuple[ModLocation, ...]:
         return (ModLocation("Java mods", installation.path / "mods", "java-jar"),)
@@ -300,13 +483,17 @@ class MinecraftAdapter(GameAdapter):
             identity = str(
                 uuid5(NAMESPACE_URL, f"{installation.installation_id}:{relative.casefold()}")
             )
+            native = None
+            with suppress(ModMeshError):
+                native = read_jar(path, installation.loader.name if installation.loader else None)
+            primary = native.mods[0] if native and native.mods else None
             mods.append(
                 InstalledMod(
                     installation.installation_id,
                     "external:" + identity,
-                    None,
+                    primary.version if primary else None,
                     (InstalledFile(relative, False),),
-                    name=name,
+                    name=primary.name if primary else name,
                     kind="java-jar",
                     enabled=not name.casefold().endswith(".disabled"),
                 )

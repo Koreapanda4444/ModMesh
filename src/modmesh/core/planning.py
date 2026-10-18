@@ -226,6 +226,11 @@ class InstallationPlanner:
         if installation.game_id != resolution.game_id:
             raise ModMeshError(ErrorCode.VALIDATION, "Installation and mod game differ")
         environment = adapter.validate(installation)
+        operation = adapter.validate_operation(installation)
+        if not operation.valid:
+            raise ModMeshError(
+                ErrorCode.CONFLICT, "; ".join(issue.message for issue in operation.issues)
+            )
         if not environment.valid:
             raise ModMeshError(ErrorCode.VALIDATION, "Game environment failed validation")
         root = installation.path
@@ -367,6 +372,13 @@ class InstallationPlanner:
             verify_file(
                 item.path, (artifact.sha256,), expected_size=artifact.size, cancelled=cancelled
             )
+        native = adapter.validate_artifacts(
+            installation, tuple((item.mod.file, item.path) for item in inputs)
+        )
+        issues.extend(
+            PlanIssue(issue.code, issue.message) for issue in native.issues if issue.blocking
+        )
+        warnings.extend(issue.message for issue in native.issues if not issue.blocking)
         if (
             len(changes) > self.policy.max_files
             or sum(change.size for change in changes) > self.policy.max_bytes

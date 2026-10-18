@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import stat
@@ -13,7 +14,9 @@ from tempfile import TemporaryDirectory
 import httpx
 
 import modmesh.core.installation as installation_engine
+import modmesh.core.processes as processes_engine
 import modmesh.core.removal as removal_engine
+from modmesh.adapters.games.minecraft import MinecraftAdapter
 from modmesh.adapters.games.palworld import PalworldAdapter
 from modmesh.core.cache import ArtifactCache
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
@@ -22,6 +25,7 @@ from modmesh.core.games import GameRegistry
 from modmesh.core.hashing import verify_file
 from modmesh.core.installation import InstallationManager
 from modmesh.core.planning import InstallationPlanner, InstallInput
+from modmesh.core.processes import java_guard
 from modmesh.core.removal import RemovalManager
 from modmesh.core.resolver import DependencyEdge, DependencyResolution, ResolvedMod
 from modmesh.core.sources import DownloadAccess, DownloadMode
@@ -562,6 +566,145 @@ def check_shared_dependencies(root: Path) -> None:
     assert not manager.installed() and not (root / "Pal/Content/Paks/~mods/One.pak").exists()
 
 
+def check_minecraft(root: Path) -> None:
+    for loader, uid, version in (
+        ("fabric", "net.fabricmc.fabric-loader", "0.16.14"),
+        ("forge", "net.minecraftforge", "52.0.1"),
+        ("neoforge", "net.neoforged", "21.1.219"),
+    ):
+        instance = root / loader
+        game = instance / "minecraft"
+        game.mkdir(parents=True)
+        (instance / "instance.cfg").write_text("InstanceType=OneSix")
+        (instance / "mmc-pack.json").write_text(
+            json.dumps(
+                {
+                    "formatVersion": 1,
+                    "components": [
+                        {"uid": "net.minecraft", "version": "1.21.1"},
+                        {"uid": uid, "version": version},
+                    ],
+                }
+            )
+        )
+        source = root / f"{loader}.jar"
+        with zipfile.ZipFile(source, "w") as archive:
+            if loader == "fabric":
+                archive.writestr(
+                    "fabric.mod.json",
+                    json.dumps(
+                        {
+                            "schemaVersion": 1,
+                            "id": "library",
+                            "version": "1.0.0",
+                            "depends": {"minecraft": "~1.21.1", "fabricloader": ">=0.16.0"},
+                        }
+                    ),
+                )
+            else:
+                name = "META-INF/mods.toml" if loader == "forge" else "META-INF/neoforge.mods.toml"
+                archive.writestr(
+                    name,
+                    'modLoader="javafml"\nloaderVersion="[4,)"\n[[mods]]\nmodId="library"\nversion="1.0.0"\n',
+                )
+        adapter = MinecraftAdapter()
+        games = GameRegistry()
+        games.register(adapter)
+        installation = adapter.inspect(game, Platform.WINDOWS)
+        assert installation is not None and installation.loader is not None
+        manager = RemovalManager(games, installation)
+        reference = SourceRef("example", loader)
+        file = ModFile(reference, "1", source.name, source.stat().st_size)
+        mod = ResolvedMod(
+            SourceProject(reference, "minecraft", loader),
+            ModVersion(
+                reference,
+                "1",
+                "1",
+                frozenset({"1.21.1"}),
+                frozenset({loader}),
+                files=(file,),
+                dependencies_known=True,
+            ),
+            file,
+            True,
+        )
+        resolution = DependencyResolution("minecraft", "1.21.1", loader, (mod,), ())
+        plan = manager.plan(resolution, (InstallInput(mod, source),))
+        assert plan.applicable, plan.issues
+        manager.apply(plan, plan.fingerprint)
+        target = game / "mods" / source.name
+        assert target.read_bytes() == source.read_bytes()
+        if loader == "fabric":
+            external = game / "mods/dependent.jar"
+            with zipfile.ZipFile(external, "w") as archive:
+                archive.writestr(
+                    "fabric.mod.json",
+                    json.dumps(
+                        {
+                            "schemaVersion": 1,
+                            "id": "dependent",
+                            "version": "1.0.0",
+                            "depends": {"library": "*"},
+                        }
+                    ),
+                )
+            removal = manager.plan_removal((reference,))
+            assert not removal.applicable and any(
+                issue.code == "native_required" for issue in removal.issues
+            )
+            assert external.exists() and target.exists()
+            external.unlink()
+            original = source.read_bytes()
+            with zipfile.ZipFile(source, "w") as archive:
+                archive.writestr(
+                    "fabric.mod.json",
+                    json.dumps(
+                        {
+                            "schemaVersion": 1,
+                            "id": "library",
+                            "version": "1.0.0",
+                            "depends": {"minecraft": ">=1.22.0"},
+                        }
+                    ),
+                )
+            changed_file = replace(file, size=source.stat().st_size)
+            changed = replace(
+                mod, file=changed_file, version=replace(mod.version, files=(changed_file,))
+            )
+            blocked = manager.plan(
+                replace(resolution, mods=(changed,)), (InstallInput(changed, source),)
+            )
+            assert not blocked.applicable and any(
+                issue.code == "native_constraint" for issue in blocked.issues
+            )
+            source.write_bytes(original)
+        removal = manager.plan_removal((reference,))
+        assert removal.applicable, removal.issues
+        manager.remove(removal, removal.fingerprint)
+        assert not target.exists() and not manager.installed()
+
+    class Process:
+        pid = 99999999
+
+        def name(self):
+            return "java.exe"
+
+        def cmdline(self):
+            return ["java", "--gameDir", "minecraft"]
+
+        def cwd(self):
+            return str(root / "fabric")
+
+    iterator = processes_engine.psutil.process_iter
+    processes_engine.psutil.process_iter = lambda: iter((Process(),))
+    try:
+        assert not java_guard(root / "fabric/minecraft").valid
+        assert java_guard(root / "different").valid
+    finally:
+        processes_engine.psutil.process_iter = iterator
+
+
 async def main() -> None:
     logging.disable(logging.CRITICAL)
     with TemporaryDirectory(prefix="modmesh-safety-") as name:
@@ -571,6 +714,7 @@ async def main() -> None:
         check_planning(Path(name))
         check_installation(Path(name) / "installation")
         check_shared_dependencies(Path(name) / "shared")
+        check_minecraft(Path(name) / "minecraft")
     print("Download, cache, plan and installation/recovery safety checks passed")
 
 

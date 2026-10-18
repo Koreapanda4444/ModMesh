@@ -114,6 +114,22 @@ class GameAdapter(ABC):
             issues.append(EnvironmentIssue("unknown_version", "Game version is not verified"))
         return EnvironmentReport(tuple(issues))
 
+    def validate_operation(self, installation: GameInstallation) -> EnvironmentReport:
+        return EnvironmentReport()
+
+    def validate_artifacts(
+        self, installation: GameInstallation, files: tuple[tuple[ModFile, Path], ...]
+    ) -> EnvironmentReport:
+        return EnvironmentReport()
+
+    def validate_removal(
+        self,
+        installation: GameInstallation,
+        paths: tuple[str, ...],
+        restored: tuple[Path, ...] = (),
+    ) -> EnvironmentReport:
+        return EnvironmentReport()
+
     def mod_locations(self, installation: GameInstallation) -> tuple[ModLocation, ...]:
         raise ModMeshError(
             ErrorCode.UNSUPPORTED, "Mod locations are not implemented for this adapter"

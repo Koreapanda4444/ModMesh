@@ -188,6 +188,31 @@ class RemovalManager(InstallationManager):
                         path,
                     )
                 )
+        adapter = self.games.get(self.installation.game_id)
+        operation = adapter.validate_operation(self.installation)
+        issues.extend(
+            PlanIssue(issue.code, issue.message) for issue in operation.issues if issue.blocking
+        )
+        restored = tuple(
+            self._slot(
+                self._operation_path(change.backup.split("/")[0]),
+                "backups",
+                int(change.backup.split("/")[2]),
+            )
+            for change in changes
+            if change.backup
+        )
+        native = adapter.validate_removal(
+            self.installation,
+            tuple(
+                change.destination for change in changes if change.action in {"delete", "restore"}
+            ),
+            restored,
+        )
+        issues.extend(
+            PlanIssue(issue.code, issue.message) for issue in native.issues if issue.blocking
+        )
+        warnings.extend(issue.message for issue in native.issues if not issue.blocking)
         return RemovalPlan(
             str(uuid4()),
             self.installation,

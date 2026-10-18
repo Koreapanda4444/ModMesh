@@ -13,6 +13,7 @@ from modmesh.core.games import (
     InstallRule,
     ModLocation,
 )
+from modmesh.core.processes import executable_guard
 from modmesh.domain.models import (
     Game,
     GameInstallation,
@@ -106,6 +107,9 @@ class PalworldAdapter(GameAdapter):
                 )
             )
         return EnvironmentReport(tuple(issues))
+
+    def validate_operation(self, installation: GameInstallation) -> EnvironmentReport:
+        return executable_guard(installation.path / _SHIPPING)
 
     def mod_locations(self, installation: GameInstallation) -> tuple[ModLocation, ...]:
         root = installation.path

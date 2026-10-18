@@ -818,6 +818,13 @@ class InstallationManager:
                     )
                     continue
                 try:
+                    idle = self.games.get(self.installation.game_id).validate_operation(
+                        self.installation
+                    )
+                    if not idle.valid:
+                        raise ModMeshError(
+                            ErrorCode.CONFLICT, "; ".join(issue.message for issue in idle.issues)
+                        )
                     results.append(self._rollback(store, record))
                 except (OSError, ModMeshError) as exc:
                     results.append(
