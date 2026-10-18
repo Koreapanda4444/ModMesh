@@ -3,18 +3,36 @@
 import argparse
 import asyncio
 import json
+import logging
 from pathlib import Path
 
 import httpx
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from modmesh import __version__
 from modmesh.core.config import ConfigurationError, load_server_settings
+from modmesh.core.diagnostics import ErrorCode, ModMeshError, configure_logging
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="ModMesh Server", version=__version__, docs_url=None, redoc_url=None)
+
+    @app.exception_handler(ModMeshError)
+    async def application_error(request: Request, error: ModMeshError) -> JSONResponse:
+        logging.getLogger("modmesh.server").warning(
+            "Request failed", extra={"context": error.as_dict()}
+        )
+        status = {
+            ErrorCode.NOT_FOUND: 404,
+            ErrorCode.AUTHENTICATION: 401,
+            ErrorCode.RATE_LIMIT: 429,
+            ErrorCode.VALIDATION: 422,
+            ErrorCode.CONFLICT: 409,
+            ErrorCode.UNSUPPORTED: 422,
+        }.get(error.code, 500)
+        return JSONResponse(status_code=status, content={"error": error.as_dict()})
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -44,6 +62,8 @@ def main() -> int:
         settings = load_server_settings(args.config)
     except ConfigurationError as exc:
         parser.error(str(exc))
+    logger = configure_logging(level=settings.log_level)
+    logger.info("Server starting", extra={"context": {"version": __version__}})
     if args.check:
         print(json.dumps(asyncio.run(check())))
     else:

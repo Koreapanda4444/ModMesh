@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QVBoxLayout, QW
 
 from modmesh import __version__
 from modmesh.core.config import ConfigurationError, load_client_settings
+from modmesh.core.diagnostics import configure_logging, install_exception_hook
 
 
 class MainWindow(QMainWindow):
@@ -44,9 +45,14 @@ def main() -> int:
     )
     args = parser.parse_args()
     try:
-        load_client_settings(args.config)
+        settings = load_client_settings(args.config)
     except ConfigurationError as exc:
         parser.error(str(exc))
+    logger = configure_logging(
+        level=settings.log_level, directory=None if args.check else settings.paths.logs
+    )
+    logger.info("Desktop starting", extra={"context": {"version": __version__}})
+    install_exception_hook(logger)
     app = QApplication([sys.argv[0]])
     app.setApplicationName("ModMesh")
     app.setApplicationVersion(__version__)

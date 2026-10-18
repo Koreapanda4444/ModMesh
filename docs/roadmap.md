@@ -7,7 +7,7 @@
 | 01 | 완료 | `chore: initialize ModMesh project` | 저장소 초기화, README 및 최소 구조. |
 | 02 | 완료 | `build: configure desktop and server toolchains` | Python 패키지/가상환경, PySide6/FastAPI 개발도구, 기초 실행/빌드/검증. |
 | 03 | 완료 | `feat: add application configuration` | 앱·서버 설정, 환경별 구성, 검증. |
-| 04 | 예정 | `feat: add logging and error handling` | 공통 구조화 오류/로그, 보안 마스킹. |
+| 04 | 완료 | `feat: add logging and error handling` | 공통 구조화 오류/로그, 보안 마스킹. |
 | 05 | 예정 | `feat: initialize local metadata storage` | SQLite 스키마·마이그레이션 및 저장 계층. |
 | 06 | 예정 | `feat: define game and mod domain models` | 게임·모드·설치/버전/파일 모델. |
 | 07 | 예정 | `feat: add canonical mod identity` | 출처 간 동일 모드 식별 근거. |

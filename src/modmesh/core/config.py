@@ -10,9 +10,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+from modmesh.core.diagnostics import ErrorCode, ModMeshError
 
-class ConfigurationError(ValueError):
+
+class ConfigurationError(ModMeshError, ValueError):
     """Configuration is invalid; messages must never contain secret values."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(ErrorCode.CONFIGURATION, message)
 
 
 def validate_server_url(value: str | None) -> str | None:
