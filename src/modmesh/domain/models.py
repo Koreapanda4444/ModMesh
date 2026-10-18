@@ -186,10 +186,17 @@ class InstalledMod:
     version: str | None
     files: tuple[InstalledFile, ...]
     source: SourceRef | None = None
+    name: str | None = None
+    kind: str | None = None
+    enabled: bool | None = None
 
     def __post_init__(self) -> None:
         require_text(self.installation_id, "installation ID")
         require_text(self.mod_id, "mod ID")
+        if self.name is not None:
+            require_text(self.name, "installed mod name")
+        if self.kind is not None:
+            require_id(self.kind, "installed mod kind")
         if self.version is not None:
             require_text(self.version, "installed mod version")
         if len({file.path.casefold() for file in self.files}) != len(self.files):

@@ -25,6 +25,9 @@ def main() -> int:
         "--root", action="append", type=Path, default=[], help="Explicit discovery root"
     )
     discover.add_argument("--path", type=Path, help="Validate and remember a manual game path")
+    discover.add_argument(
+        "--mods", action="store_true", help="Read installed mod metadata without changing files"
+    )
     args = parser.parse_args()
     if args.path is not None and args.game is None:
         parser.error("--path requires --game")
@@ -33,11 +36,21 @@ def main() -> int:
         configure_logging(level=settings.log_level)
         context = DiscoveryContext(current_platform(), tuple(args.root), os.environ)
         with MetadataStore(settings.paths.database) as store:
-            engine = DiscoveryEngine(create_game_registry(), store)
+            registry = create_game_registry()
+            engine = DiscoveryEngine(registry, store)
             if args.path is not None:
                 engine.register_manual(args.game, args.path, context)
             result = engine.discover(context, game_id=args.game)
-            print(json.dumps(asdict(result), ensure_ascii=False, default=str))
+            payload = asdict(result)
+            if args.mods:
+                payload["mods"] = [
+                    asdict(mod)
+                    for record in result.records
+                    for mod in registry.get(record.installation.game_id).scan_mods(
+                        record.installation
+                    )
+                ]
+            print(json.dumps(payload, ensure_ascii=False, default=str))
         return 0
     except ModMeshError as exc:
         print(json.dumps({"error": exc.as_dict()}, ensure_ascii=False), file=sys.stderr)
