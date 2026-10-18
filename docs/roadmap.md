@@ -13,7 +13,7 @@
 | 07 | 완료 | `feat: add canonical mod identity` | 출처 간 동일 모드 식별 근거. |
 | 08 | 완료 | `feat: add file hash and artifact identity` | SHA-256/Artifact 식별·무결성. |
 | 09 | 완료 | `feat: define dependency relationships` | required/optional/incompatible/embedded 관계. |
-| 10 | 예정 | `feat: add game adapter architecture` | 독립 Game Adapter 계약 및 Registry. |
+| 10 | 완료 | `feat: add game adapter architecture` | 독립 Game Adapter 계약 및 Registry. |
 | 11 | 예정 | `feat: add source adapter architecture` | Source Adapter/지원 capability/Registry. |
 | 12 | 예정 | `feat: implement game discovery engine` | 게임 경로 탐지 및 수동 지정. |
 | 13 | 예정 | `feat: add Palworld game support` | Steam 설치·버전·모드 환경 탐지. |
