@@ -26,7 +26,7 @@
 | 20 | 완료 | `feat: add cross-source mod matching` | 동일 모드 후보 매핑. |
 | 21 | 완료 | `feat: add identical artifact merging` | 확인된 동일 해시 파일 병합. |
 | 22 | 완료 | `feat: add per-game source priorities` | 게임별 출처 우선순위와 fallback. |
-| 23 | 예정 | `feat: add mod download manager` | 취소·재시도·진행률·다운로드 큐. |
+| 23 | 완료 | `feat: add mod download manager` | 취소·재시도·진행률·다운로드 큐. |
 | 24 | 예정 | `feat: add hash verified mod cache` | 검증 캐시 재사용 및 정리. |
 | 25 | 예정 | `feat: add dependency resolver` | 버전 제약/필수 의존성 해결. |
 | 26 | 예정 | `feat: add dependency conflict detection` | 충돌·누락·순환·로더 호환성. |

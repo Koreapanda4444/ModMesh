@@ -4,7 +4,7 @@
 
 ## 개발 상태
 
-01~22번: Python 패키지, PySide6 데스크톱 기본 창, FastAPI 서버 health 엔드포인트와 빌드·품질 검증 기반을 구현했습니다. 게임 지원과 모드 관리는 후속 단계입니다.
+01~23번을 구현했습니다. 공통 코어, Palworld 탐지, 배포처 연동, 통합 검색과 검증 다운로드를 CLI로 사용할 수 있습니다. PySide6는 기본 창, FastAPI는 health 엔드포인트까지입니다. 설치·관리 화면·계정·팩 기능은 후속 단계이며, 실게임/인증 API의 미검증 항목은 [검증 범위](docs/verification.md)에 명시했습니다.
 
 ## 개발 환경
 
@@ -61,7 +61,7 @@ Linux 개발 환경에서는 `.venv/bin/python`, `.venv/bin/modmesh`를 사용�
 
 Nexus는 공개 trending feed와 공식 다운로드 페이지 인계를 제공합니다. API 기반 상세·파일 조회는 `MODMESH_NEXUS_API_KEY`가 필요합니다. 전체 카탈로그 검색과 동일하지 않으며 계정 권한에 따른 다운로드 제한을 우회하지 않습니다. [검증 범위와 제약](docs/verification.md)을 참고하세요.
 
-Modrinth는 Minecraft Java 모드 검색, 버전·로더 필터, 상세·파일·의존성·체크섬 조회와 허용된 CDN URL 확인을 지원합니다. 실제 API로 검증했으며 파일 저장은 다운로드 단계에서 연결합니다.
+Modrinth는 Minecraft Java 모드 검색, 버전·로더 필터, 상세·파일·의존성·체크섬 조회와 허용된 CDN URL 확인을 지원합니다. 실제 API로 검증했으며 파일 저장과 강한 체크섬 검증도 확인했습니다.
 
 CurseForge는 승인된 `MODMESH_CURSEFORGE_API_KEY`로 Minecraft Java 모드 API를 사용합니다. 명시적인 제3자 배포 허용과 API의 다운로드 URL이 확인되어야 직접 다운로드하며, 나머지는 공식 사이트로 인계합니다. 현재 인증 API 실환경 검증은 키 제공 전까지 미완료입니다.
 
@@ -77,3 +77,12 @@ CurseForge는 승인된 `MODMESH_CURSEFORGE_API_KEY`로 Minecraft Java 모드 AP
 통합 검색의 `matching`은 확인된 동일 모드 그룹과 수동 확인이 필요한 후보를 구분합니다. 이름·제작자·저장소가 비슷한 것만으로 확정하지 않습니다. 명시적인 근거로 연결한 매핑과 사용자가 거절한 후보는 로컬에 보존합니다.
 
 기본 출처 순서는 Minecraft의 경우 Modrinth → CurseForge → Nexus, Palworld는 현재 검증된 게임 매핑이 있는 Nexus입니다. `[client.source_priorities]` 테이블의 게임 ID별 배열로 순서를 바꿀 수 있습니다. 이는 출처 활성화나 인증을 대신하지 않습니다. 강한 동일 파일 근거·게임 버전/로더 호환성·다운로드 권한이 확인된 후보만 대체 출처로 사용할 수 있으며, 원래 선택한 버전은 유지합니다.
+
+## 검증 다운로드 CLI
+
+```powershell
+.venv\Scripts\modmesh-cli versions --game minecraft --source modrinth --project sodium --game-version 1.21.1 --loader fabric --limit 5
+.venv\Scripts\modmesh-cli download --game minecraft --source modrinth --project AANobbMI --version SMxNOGZ6 --game-version 1.21.1 --loader fabric --output ./sodium.jar --progress
+```
+
+`versions`가 반환한 정확한 출처 버전/파일 ID를 사용합니다. 파일이 여러 개이고 primary가 유일하지 않으면 `--file`로 선택해야 합니다. 다운로드는 설치를 실행하지 않습니다. 큐·동시 실행 제한·진행률·취소·일시 오류 재시도와 출처 허용 CDN 범위를 적용합니다. 기존 대상 파일은 덮어쓰지 않으며 임시 파일에서 모든 제공 체크섬과 크기를 검증한 뒤 게시합니다. 출처 해시가 없으면 `unverified`, MD5/SHA-1만 있으면 `weak`입니다. API 인증 헤더를 CDN으로 전달하지 않습니다. 직접 다운로드 권한이 없으면 공식 외부 흐름 안내를 반환합니다.

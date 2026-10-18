@@ -31,9 +31,9 @@ jobs:
       - name: Install pinned dependencies
         run: python -m pip install -c requirements.lock ".[desktop,server,dev]"
       - name: Lint
-        run: python -m ruff check src
+        run: python -m ruff check src tools
       - name: Check formatting
-        run: python -m ruff format --check src
+        run: python -m ruff format --check src tools
       - name: Type check
         run: python -m mypy
       - name: Build wheel
@@ -44,3 +44,5 @@ jobs:
         run: modmesh --check
       - name: Exercise server health endpoint
         run: modmesh-server --check
+      - name: Verify file operation safety
+        run: python tools/verify_safety.py

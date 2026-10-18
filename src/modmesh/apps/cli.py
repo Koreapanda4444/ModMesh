@@ -8,15 +8,23 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from modmesh.apps.runtime import create_game_registry, source_priorities, source_registry
+from modmesh.apps.runtime import (
+    DOWNLOAD_DOMAINS,
+    create_game_registry,
+    source_priorities,
+    source_registry,
+)
+from modmesh.core.artifact_matching import ArtifactCandidate
 from modmesh.core.config import ClientSettings, load_client_settings
-from modmesh.core.diagnostics import ModMeshError, configure_logging
+from modmesh.core.diagnostics import ErrorCode, ModMeshError, configure_logging, redact
 from modmesh.core.discovery import DiscoveryEngine, current_platform
+from modmesh.core.downloads import DownloadManager, DownloadProgress
 from modmesh.core.games import DiscoveryContext
 from modmesh.core.identity import IdentityRegistry
 from modmesh.core.matching import ProjectMatcher
 from modmesh.core.search import SearchState, UnifiedSearch
-from modmesh.core.sources import SearchRequest, SearchSort
+from modmesh.core.sources import SearchRequest, SearchSort, VersionQuery
+from modmesh.domain.models import ModVersion
 from modmesh.storage.metadata import MetadataStore
 
 
@@ -46,6 +54,26 @@ def main() -> int:
     search.add_argument(
         "--sort", choices=[value.value for value in SearchSort], default=SearchSort.RELEVANCE.value
     )
+    versions = commands.add_parser("versions", help="List exact source version and file IDs")
+    download = commands.add_parser(
+        "download", help="Download one pinned source file without installing it"
+    )
+    for command in (versions, download):
+        command.add_argument("--game", required=True)
+        command.add_argument("--source", required=True)
+        command.add_argument("--project", required=True, help="Exact project ID returned by search")
+        command.add_argument("--game-version")
+        command.add_argument("--loader")
+    versions.add_argument("--limit", type=int, default=20)
+    download.add_argument("--version", required=True, help="Exact source version ID")
+    download.add_argument("--file", help="Exact file ID; required if no unique primary file exists")
+    download.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help="Destination file; existing entries are never overwritten",
+    )
+    download.add_argument("--progress", action="store_true", help="Emit progress JSON to stderr")
     args = parser.parse_args()
     if args.command == "discover" and args.path is not None and args.game is None:
         parser.error("--path requires --game")
@@ -54,6 +82,8 @@ def main() -> int:
         configure_logging(level=settings.log_level)
         if args.command == "search":
             return asyncio.run(_search(args, settings))
+        if args.command in {"versions", "download"}:
+            return asyncio.run(_source_files(args, settings))
         context = DiscoveryContext(current_platform(), tuple(args.root), os.environ)
         with MetadataStore(settings.paths.database) as store:
             registry = create_game_registry()
@@ -75,6 +105,8 @@ def main() -> int:
     except ModMeshError as exc:
         print(json.dumps({"error": exc.as_dict()}, ensure_ascii=False), file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        return 130
 
 
 async def _search(args: argparse.Namespace, settings: ClientSettings) -> int:
@@ -98,6 +130,77 @@ async def _search(args: argparse.Namespace, settings: ClientSettings) -> int:
             )
         print(json.dumps(payload, ensure_ascii=False, default=str))
         return 0 if any(source.state == SearchState.SUCCESS for source in result.sources) else 1
+
+
+def _version_payload(version: ModVersion) -> dict[str, object]:
+    payload = asdict(version)
+    for file in payload["files"]:
+        file.pop("download_url", None)
+    return payload
+
+
+def _progress(event: DownloadProgress) -> None:
+    print(json.dumps(redact(asdict(event)), ensure_ascii=False), file=sys.stderr)
+
+
+async def _source_files(args: argparse.Namespace, settings: ClientSettings) -> int:
+    async with source_registry() as registry:
+        source = registry.get(args.source)
+        project = await source.project(args.game, args.project)
+        query = (
+            VersionQuery(args.game_version, args.loader)
+            if args.game_version or args.loader
+            else None
+        )
+        versions = await source.versions(args.game, project.reference.project_id, query=query)
+        if args.command == "versions":
+            if not 1 <= args.limit <= 1000:
+                raise ModMeshError(
+                    ErrorCode.VALIDATION, "Version output limit must be between 1 and 1000"
+                )
+            print(
+                json.dumps(
+                    {
+                        "project": asdict(project),
+                        "total": len(versions),
+                        "versions": [
+                            _version_payload(version) for version in versions[: args.limit]
+                        ],
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                )
+            )
+            return 0
+        version = next(
+            (version for version in versions if version.version_id == args.version), None
+        )
+        if version is None:
+            raise ModMeshError(ErrorCode.NOT_FOUND, "Requested source version is unavailable")
+        files = (
+            tuple(file for file in version.files if file.file_id == args.file)
+            if args.file
+            else version.files
+        )
+        if not files:
+            raise ModMeshError(ErrorCode.NOT_FOUND, "Requested source file is unavailable")
+        if len(files) > 1:
+            primary = tuple(file for file in files if file.primary)
+            if len(primary) != 1:
+                raise ModMeshError(ErrorCode.VALIDATION, "Choose an exact --file ID")
+            files = primary
+        requested = ArtifactCandidate(project, version, files[0], args.game_version, args.loader)
+        async with DownloadManager(DOWNLOAD_DOMAINS) as manager:
+            result = await manager.submit_candidate(
+                requested,
+                (),
+                registry,
+                source_priorities(settings.source_priorities),
+                args.output,
+                progress=_progress if args.progress else None,
+            ).wait()
+        print(json.dumps(asdict(result), ensure_ascii=False, default=str))
+        return 0
 
 
 if __name__ == "__main__":

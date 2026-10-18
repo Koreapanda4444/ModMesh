@@ -73,6 +73,7 @@ async def choose_download(
     priorities: SourcePriorities,
     *,
     allow_fallback: bool = True,
+    exclude_sources: frozenset[str] = frozenset(),
 ) -> DownloadChoice:
     pool = tuple(dict.fromkeys((requested, *alternatives))) if allow_fallback else (requested,)
     group = next(group for group in merge_artifacts(pool) if requested in group.candidates)
@@ -86,6 +87,8 @@ async def choose_download(
     external: tuple[ArtifactCandidate, DownloadAccess] | None = None
     for candidate in ordered:
         key = candidate.file.project.source_id
+        if key in exclude_sources:
+            continue
         try:
             source = registry.get(key)
             status = source.status(requested.project.game_id)

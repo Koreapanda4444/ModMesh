@@ -19,6 +19,12 @@ DEFAULT_SOURCE_PRIORITIES = {
     "palworld": ("nexus",),
 }
 
+DOWNLOAD_DOMAINS = {
+    "modrinth": ("cdn.modrinth.com",),
+    "nexus": ("nexusmods.com", "nexus-cdn.com"),
+    "curseforge": ("forgecdn.net", "cursecdn.com"),
+}
+
 
 def source_priorities(overrides: Mapping[str, tuple[str, ...]]) -> SourcePriorities:
     return SourcePriorities({**DEFAULT_SOURCE_PRIORITIES, **overrides})
