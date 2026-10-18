@@ -8,7 +8,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from modmesh.apps.runtime import create_game_registry, source_registry
+from modmesh.apps.runtime import create_game_registry, source_priorities, source_registry
 from modmesh.core.config import ClientSettings, load_client_settings
 from modmesh.core.diagnostics import ModMeshError, configure_logging
 from modmesh.core.discovery import DiscoveryEngine, current_platform
@@ -88,7 +88,9 @@ async def _search(args: argparse.Namespace, settings: ClientSettings) -> int:
         SearchSort(args.sort),
     )
     async with source_registry() as registry:
-        result = await UnifiedSearch(registry).search(request, source_ids=args.source)
+        result = await UnifiedSearch(
+            registry, priorities=source_priorities(settings.source_priorities)
+        ).search(request, source_ids=args.source)
         payload = asdict(result)
         with MetadataStore(settings.paths.database) as store:
             payload["matching"] = asdict(

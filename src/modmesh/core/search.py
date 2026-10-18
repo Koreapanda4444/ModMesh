@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
+from modmesh.core.priorities import SourcePriorities
 from modmesh.core.sources import (
     SearchPage,
     SearchRequest,
@@ -43,13 +44,19 @@ class UnifiedSearchResult:
 
 class UnifiedSearch:
     def __init__(
-        self, registry: SourceRegistry, *, concurrency: int = 4, timeout: float = 35.0
+        self,
+        registry: SourceRegistry,
+        *,
+        concurrency: int = 4,
+        timeout: float = 35.0,
+        priorities: SourcePriorities | None = None,
     ) -> None:
         if not 1 <= concurrency <= 16 or not math.isfinite(timeout) or timeout <= 0:
             raise ModMeshError(ErrorCode.CONFIGURATION, "Invalid search concurrency or timeout")
         self.registry = registry
         self.concurrency = concurrency
         self.timeout = timeout
+        self.priorities = priorities or SourcePriorities()
 
     async def search(
         self,
@@ -67,6 +74,14 @@ class UnifiedSearch:
             raise ModMeshError(
                 ErrorCode.UNSUPPORTED, "No configured sources support the requested game"
             )
+        sources = tuple(
+            sorted(
+                sources,
+                key=lambda source: self.priorities.rank(
+                    request.game_id, source.descriptor.source_id
+                ),
+            )
+        )
         offsets = dict(offsets or {})
         if set(offsets) - {source.descriptor.source_id for source in sources} or any(
             value < 0 for value in offsets.values()

@@ -8,9 +8,11 @@ import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from urllib.parse import urlsplit, urlunsplit
 
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
+from modmesh.domain.validation import require_id
 
 
 class ConfigurationError(ModMeshError, ValueError):
@@ -80,10 +82,14 @@ class ClientSettings:
     paths: AppPaths
     server_url: str | None = None
     log_level: str = "INFO"
+    source_priorities: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "server_url", validate_server_url(self.server_url))
         _log_level(self.log_level)
+        object.__setattr__(
+            self, "source_priorities", MappingProxyType(_source_priorities(self.source_priorities))
+        )
 
 
 @dataclass(frozen=True)
@@ -159,7 +165,10 @@ def load_client_settings(
     explicit = path is not None or "MODMESH_CONFIG" in env
     path = path or Path(env.get("MODMESH_CONFIG", str(paths.config_dir / "config.toml")))
     data = _section(
-        path, "client", {"data_dir", "cache_dir", "server_url", "log_level"}, required=explicit
+        path,
+        "client",
+        {"data_dir", "cache_dir", "server_url", "log_level", "source_priorities"},
+        required=explicit,
     )
     for key in ("data_dir", "cache_dir", "server_url", "log_level"):
         if (name := f"MODMESH_{key.upper()}") in env:
@@ -180,7 +189,31 @@ def load_client_settings(
         ),
         server_url=_string(data, "server_url", None),
         log_level=_log_level(_string(data, "log_level", "INFO") or "INFO"),
+        source_priorities=_source_priorities(data.get("source_priorities", {})),
     )
+
+
+def _source_priorities(value: object) -> dict[str, tuple[str, ...]]:
+    if not isinstance(value, Mapping):
+        raise ConfigurationError("Source priorities must be a game-to-source-list table")
+    result: dict[str, tuple[str, ...]] = {}
+    for game_id, sources in value.items():
+        if (
+            not isinstance(game_id, str)
+            or not isinstance(sources, (list, tuple))
+            or any(not isinstance(source, str) for source in sources)
+        ):
+            raise ConfigurationError("Source priority entries must be string lists")
+        try:
+            require_id(game_id, "priority game ID")
+            for source in sources:
+                require_id(source, "priority source ID")
+        except ModMeshError as exc:
+            raise ConfigurationError("Invalid game/source ID in source priorities") from exc
+        if len(set(sources)) != len(sources):
+            raise ConfigurationError("Duplicate source in priority list")
+        result[game_id] = tuple(sources)
+    return result
 
 
 def load_server_settings(

@@ -11,7 +11,17 @@ from modmesh.adapters.sources.nexus import NexusSource
 from modmesh.core.diagnostics import ModMeshError
 from modmesh.core.games import GameRegistry
 from modmesh.core.network import EnvironmentCredentials
+from modmesh.core.priorities import SourcePriorities
 from modmesh.core.sources import SourceAdapter, SourceDescriptor, SourceRegistry, UnavailableSource
+
+DEFAULT_SOURCE_PRIORITIES = {
+    "minecraft": ("modrinth", "curseforge", "nexus"),
+    "palworld": ("nexus",),
+}
+
+
+def source_priorities(overrides: Mapping[str, tuple[str, ...]]) -> SourcePriorities:
+    return SourcePriorities({**DEFAULT_SOURCE_PRIORITIES, **overrides})
 
 
 def create_game_registry() -> GameRegistry:
