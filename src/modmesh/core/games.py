@@ -62,12 +62,15 @@ class InstallRule:
     destination: str
     layout: str
     extensions: frozenset[str]
+    ignored_files: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         require_id(self.rule_id, "install rule ID")
         require_text(self.layout, "install layout")
         object.__setattr__(self, "destination", relative_path(self.destination))
-        if not self.extensions or any(not ext.startswith(".") for ext in self.extensions):
+        if not self.extensions or any(
+            ext != "*" and not ext.startswith(".") for ext in self.extensions
+        ):
             raise ModMeshError(
                 ErrorCode.VALIDATION, "Installation rules require explicit file extensions"
             )
@@ -127,6 +130,16 @@ class GameAdapter(ABC):
         raise ModMeshError(
             ErrorCode.UNSUPPORTED, "Installation rules are not implemented for this adapter"
         )
+
+    def validate_payload(
+        self, installation: GameInstallation, rule: InstallRule, paths: tuple[str, ...]
+    ) -> EnvironmentReport:
+        return EnvironmentReport()
+
+    def auxiliary_files(
+        self, installation: GameInstallation, rule: InstallRule, paths: tuple[str, ...]
+    ) -> Mapping[str, bytes]:
+        return {}
 
     def removal_rules(self, installation: GameInstallation) -> tuple[InstallRule, ...]:
         raise ModMeshError(

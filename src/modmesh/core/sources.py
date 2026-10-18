@@ -114,6 +114,8 @@ class DownloadAccess:
 
 
 class SourceAdapter(ABC):
+    version_filters = False
+
     @property
     @abstractmethod
     def descriptor(self) -> SourceDescriptor:

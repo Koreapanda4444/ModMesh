@@ -1,21 +1,27 @@
 import asyncio
 import hashlib
 import logging
+import stat
 import subprocess
 import sys
+import zipfile
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import httpx
 
+from modmesh.adapters.games.palworld import PalworldAdapter
 from modmesh.core.cache import ArtifactCache
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.downloads import DownloadManager, DownloadPolicy, DownloadResult, DownloadState
+from modmesh.core.games import GameRegistry
 from modmesh.core.hashing import verify_file
+from modmesh.core.planning import InstallationPlanner, InstallInput
+from modmesh.core.resolver import DependencyResolution, ResolvedMod
 from modmesh.core.sources import DownloadAccess, DownloadMode
 from modmesh.domain.artifacts import FileHash, HashAlgorithm
-from modmesh.domain.models import ModFile, SourceRef
+from modmesh.domain.models import ModFile, ModVersion, Platform, SourceProject, SourceRef
 
 DATA = b"verified bytes\x00" * 40000
 FILE = ModFile(
@@ -269,13 +275,95 @@ async def check_processes(root: Path) -> None:
             child.wait()
 
 
+def check_planning(root: Path) -> None:
+    game = root / "game"
+    binary = game / "Pal/Binaries/Win64/Palworld-Win64-Shipping.exe"
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"MZ")
+    (game / "Palworld.exe").write_bytes(b"MZ")
+    adapter = PalworldAdapter()
+    installation = adapter.inspect(game, Platform.WINDOWS)
+    assert installation is not None
+    registry = GameRegistry()
+    registry.register(adapter)
+    planner = InstallationPlanner(registry)
+    archive = root / "package.zip"
+
+    def plan():
+        file = ModFile(
+            SourceRef("example", "p"),
+            "zip",
+            "package.zip",
+            archive.stat().st_size,
+            hashes=(
+                FileHash(HashAlgorithm.SHA256, hashlib.sha256(archive.read_bytes()).hexdigest()),
+            ),
+        )
+        project = SourceProject(file.project, "palworld", "package")
+        version = ModVersion(file.project, "1", "1", files=(file,), dependencies_known=True)
+        mod = ResolvedMod(project, version, file, True)
+        resolution = DependencyResolution("palworld", None, None, (mod,), ())
+        return planner.build(
+            installation, resolution, (InstallInput(mod, archive, "palworld-pak"),)
+        )
+
+    with zipfile.ZipFile(archive, "w") as package:
+        package.writestr("one.pak", b"payload")
+    first = plan()
+    assert first.applicable and first.fingerprint == plan().fingerprint
+    assert not (game / "Pal/Content/Paks").exists()
+    destination = game / "Pal/Content/Paks/~mods/one.pak"
+    destination.parent.mkdir(parents=True)
+    destination.write_bytes(b"user content")
+    assert not plan().applicable and destination.read_bytes() == b"user content"
+    for name in ("../escape.pak", "/escape.pak", r"C:\escape.pak", "CON.pak", "one.pak:stream"):
+        with zipfile.ZipFile(archive, "w") as package:
+            package.writestr(name, b"bad")
+        try:
+            plan()
+        except ModMeshError:
+            pass
+        else:
+            raise AssertionError("Unsafe archive path was accepted")
+    with zipfile.ZipFile(archive, "w") as package:
+        package.writestr("A.pak", b"one")
+        package.writestr("a.pak", b"two")
+    try:
+        plan()
+    except ModMeshError as exc:
+        assert exc.code == ErrorCode.CONFLICT
+    else:
+        raise AssertionError("Case-colliding archive was accepted")
+    with zipfile.ZipFile(archive, "w") as package:
+        info = zipfile.ZipInfo("link.pak")
+        info.create_system = 3
+        info.external_attr = (stat.S_IFLNK | 0o777) << 16
+        package.writestr(info, "outside")
+    try:
+        plan()
+    except ModMeshError:
+        pass
+    else:
+        raise AssertionError("Archive link was accepted")
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as package:
+        package.writestr("large.pak", b"0" * 100000)
+    try:
+        plan()
+    except ModMeshError:
+        pass
+    else:
+        raise AssertionError("Excessive compression ratio was accepted")
+    assert destination.read_bytes() == b"user content"
+
+
 async def main() -> None:
     logging.disable(logging.CRITICAL)
     with TemporaryDirectory(prefix="modmesh-safety-") as name:
         await asyncio.wait_for(check_downloads(Path(name)), timeout=20)
         await asyncio.wait_for(check_cache(Path(name)), timeout=20)
         await check_processes(Path(name) / "processes")
-    print("Download and cache safety checks passed")
+        check_planning(Path(name))
+    print("Download, cache and installation-plan safety checks passed")
 
 
 if __name__ == "__main__":

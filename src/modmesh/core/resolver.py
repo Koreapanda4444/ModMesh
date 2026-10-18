@@ -197,7 +197,9 @@ class DependencyResolver:
                             values = await source.versions(
                                 game_id,
                                 reference.project_id,
-                                query=VersionQuery(game_version, loader),
+                                query=VersionQuery(game_version, loader)
+                                if source.version_filters
+                                else None,
                             )
                             if len(values) > 2000:
                                 raise ModMeshError(

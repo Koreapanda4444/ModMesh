@@ -5,6 +5,7 @@ import os
 import sys
 from dataclasses import asdict
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from modmesh.apps.runtime import (
     DOWNLOAD_DOMAINS,
@@ -22,10 +23,11 @@ from modmesh.core.downloads import DownloadManager, DownloadPolicy, DownloadProg
 from modmesh.core.games import DiscoveryContext
 from modmesh.core.identity import IdentityRegistry
 from modmesh.core.matching import ProjectMatcher
-from modmesh.core.resolver import DependencyResolver, ResolvedMod
+from modmesh.core.planning import InstallationPlanner, InstallInput
+from modmesh.core.resolver import DependencyResolution, DependencyResolver, ResolvedMod
 from modmesh.core.search import SearchState, UnifiedSearch
-from modmesh.core.sources import SearchRequest, SearchSort, VersionQuery
-from modmesh.domain.models import ModVersion
+from modmesh.core.sources import SearchRequest, SearchSort, SourceRegistry, VersionQuery
+from modmesh.domain.models import GameInstallation, ModVersion
 from modmesh.storage.metadata import MetadataStore
 
 
@@ -60,14 +62,18 @@ def main() -> int:
         "download", help="Download one pinned source file without installing it"
     )
     resolve = commands.add_parser("resolve", help="Resolve required dependency versions")
-    for command in (versions, download, resolve):
+    plan = commands.add_parser("plan", help="Preview verified game file changes")
+    plan.add_argument("--path", required=True, type=Path)
+    plan.add_argument("--rule", help="Explicit game installation rule ID")
+    plan.add_argument("--archive-prefix", default="")
+    for command in (versions, download, resolve, plan):
         command.add_argument("--game", required=True)
         command.add_argument("--source", required=True)
         command.add_argument("--project", required=True, help="Exact project ID returned by search")
         command.add_argument("--game-version")
         command.add_argument("--loader")
     versions.add_argument("--limit", type=int, default=20)
-    for command in (download, resolve):
+    for command in (download, resolve, plan):
         command.add_argument("--version", required=True, help="Exact source version ID")
         command.add_argument("--file", help="Exact source file ID")
     download.add_argument(
@@ -101,7 +107,7 @@ def main() -> int:
             return 0
         if args.command == "search":
             return asyncio.run(_search(args, settings))
-        if args.command in {"versions", "download", "resolve"}:
+        if args.command in {"versions", "download", "resolve", "plan"}:
             return asyncio.run(_source_files(args, settings))
         context = DiscoveryContext(current_platform(), tuple(args.root), os.environ)
         with MetadataStore(settings.paths.database) as store:
@@ -163,6 +169,24 @@ def _progress(event: DownloadProgress) -> None:
 
 
 async def _source_files(args: argparse.Namespace, settings: ClientSettings) -> int:
+    installation = None
+    if args.command == "plan":
+        installation = (
+            create_game_registry()
+            .get(args.game)
+            .inspect(args.path.expanduser().resolve(), current_platform())
+        )
+        if installation is None:
+            raise ModMeshError(ErrorCode.VALIDATION, "Path is not a supported game installation")
+        actual_version = installation.version.value
+        actual_loader = installation.loader.name if installation.loader else None
+        if (args.game_version is not None and args.game_version != actual_version) or (
+            args.loader is not None and args.loader != actual_loader
+        ):
+            raise ModMeshError(
+                ErrorCode.CONFLICT, "Requested context differs from the detected game"
+            )
+        args.game_version, args.loader = actual_version, actual_loader
     async with source_registry() as registry:
         source = registry.get(args.source)
         project = await source.project(args.game, args.project)
@@ -171,7 +195,11 @@ async def _source_files(args: argparse.Namespace, settings: ClientSettings) -> i
             if args.game_version or args.loader
             else None
         )
-        versions = await source.versions(args.game, project.reference.project_id, query=query)
+        versions = await source.versions(
+            args.game,
+            project.reference.project_id,
+            query=query if args.command != "plan" or source.version_filters else None,
+        )
         if args.command == "versions":
             if not 1 <= args.limit <= 1000:
                 raise ModMeshError(
@@ -208,7 +236,7 @@ async def _source_files(args: argparse.Namespace, settings: ClientSettings) -> i
             if len(primary) != 1:
                 raise ModMeshError(ErrorCode.VALIDATION, "Choose an exact --file ID")
             files = primary
-        if args.command == "resolve":
+        if args.command in {"resolve", "plan"}:
             with MetadataStore(settings.paths.database) as store:
                 result = await DependencyResolver(
                     registry,
@@ -220,6 +248,9 @@ async def _source_files(args: argparse.Namespace, settings: ClientSettings) -> i
                     game_version=args.game_version,
                     loader=args.loader,
                 )
+            if args.command == "plan":
+                assert installation is not None
+                return await _plan(args, settings, registry, installation, result)
             payload = asdict(result)
             for mod, resolved in zip(payload["mods"], result.mods, strict=True):
                 mod["file"].pop("download_url", None)
@@ -255,6 +286,74 @@ async def _source_files(args: argparse.Namespace, settings: ClientSettings) -> i
                 payload["source_verification"] = entry.artifact.source_verification
         print(json.dumps(payload, ensure_ascii=False, default=str))
         return 0
+
+
+async def _plan(
+    args: argparse.Namespace,
+    settings: ClientSettings,
+    registry: SourceRegistry,
+    installation: GameInstallation,
+    resolution: DependencyResolution,
+) -> int:
+    report = analyze_dependencies(resolution)
+    if report.blocked:
+        print(
+            json.dumps(
+                {"blocked": True, "conflicts": asdict(report)}, ensure_ascii=False, default=str
+            )
+        )
+        return 1
+    with (
+        TemporaryDirectory(prefix="modmesh-plan-") as name,
+        ArtifactCache(settings.paths.cache_dir, max_bytes=settings.cache_max_bytes) as cache,
+    ):
+        inputs = []
+        async with DownloadManager(
+            DOWNLOAD_DOMAINS,
+            policy=DownloadPolicy(max_bytes=min(8 * 1024**3, settings.cache_max_bytes)),
+        ) as manager:
+            for index, mod in enumerate(resolution.mods):
+
+                async def fetch(destination: Path, selected: ResolvedMod = mod) -> DownloadResult:
+                    return await manager.submit_candidate(
+                        ArtifactCandidate(
+                            selected.project,
+                            selected.version,
+                            selected.file,
+                            resolution.game_version,
+                            resolution.loader,
+                        ),
+                        (),
+                        registry,
+                        source_priorities(settings.source_priorities),
+                        destination,
+                    ).wait()
+
+                entry = await cache.obtain(mod.file, fetch)
+                path = await cache.export_async(entry, Path(name) / str(index))
+                inputs.append(
+                    InstallInput(
+                        mod,
+                        path,
+                        args.rule if mod.direct else None,
+                        args.archive_prefix if mod.direct else "",
+                    )
+                )
+        planner = InstallationPlanner(create_game_registry())
+        plan = await asyncio.to_thread(planner.build, installation, resolution, inputs)
+        payload = asdict(plan)
+        payload["applicable"] = plan.applicable
+        payload["fingerprint"] = plan.fingerprint
+        print(json.dumps(_without_urls(payload), ensure_ascii=False, default=str))
+        return 0 if plan.applicable else 1
+
+
+def _without_urls(value: object) -> object:
+    if isinstance(value, dict):
+        return {key: _without_urls(item) for key, item in value.items() if key != "download_url"}
+    if isinstance(value, (list, tuple)):
+        return [_without_urls(item) for item in value]
+    return value
 
 
 if __name__ == "__main__":

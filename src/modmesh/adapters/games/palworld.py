@@ -10,6 +10,7 @@ from modmesh.core.games import (
     EnvironmentReport,
     GameAdapter,
     GameCapability,
+    InstallRule,
     ModLocation,
 )
 from modmesh.domain.models import (
@@ -19,6 +20,7 @@ from modmesh.domain.models import (
     InstalledFile,
     InstalledMod,
     Loader,
+    ModFile,
     Platform,
 )
 
@@ -29,7 +31,12 @@ _SHIPPING = Path("Pal/Binaries/Win64/Palworld-Win64-Shipping.exe")
 class PalworldAdapter(GameAdapter):
     game = Game("palworld", "Palworld", ("steam",), frozenset({Platform.WINDOWS}))
     capabilities = frozenset(
-        {GameCapability.DISCOVERY, GameCapability.VERSION, GameCapability.MOD_DISCOVERY}
+        {
+            GameCapability.DISCOVERY,
+            GameCapability.VERSION,
+            GameCapability.MOD_DISCOVERY,
+            GameCapability.INSTALL_RULES,
+        }
     )
 
     def candidates(self, context: DiscoveryContext) -> Iterable[Path]:
@@ -108,6 +115,91 @@ class PalworldAdapter(GameAdapter):
             ModLocation("UE4SS legacy mods", root / "Pal/Binaries/Win64/Mods", "ue4ss"),
             ModLocation("UE4SS nested mods", root / "Pal/Binaries/Win64/ue4ss/Mods", "ue4ss"),
         )
+
+    def installation_rules(
+        self, installation: GameInstallation, file: ModFile
+    ) -> tuple[InstallRule, ...]:
+        archive = file.filename.lower().endswith(".zip")
+        if not archive and not file.filename.lower().endswith(".pak"):
+            return ()
+        layout = "archive" if archive else "file"
+        extensions = frozenset({".pak", ".utoc", ".ucas"}) if archive else frozenset({".pak"})
+        docs = frozenset({"readme.md", "readme.txt", "license", "license.txt", "changelog.txt"})
+        rules = [
+            InstallRule("palworld-pak", "Pal/Content/Paks/~mods", layout, extensions, docs),
+            InstallRule(
+                "palworld-blueprint", "Pal/Content/Paks/LogicMods", layout, extensions, docs
+            ),
+        ]
+        if archive and installation.loader is not None and installation.loader.name == "ue4ss":
+            base = (
+                "Pal/Binaries/Win64/ue4ss"
+                if (installation.path / "Pal/Binaries/Win64/ue4ss/UE4SS.dll").is_file()
+                else "Pal/Binaries/Win64"
+            )
+            rules.append(
+                InstallRule("palworld-ue4ss", base + "/Mods", "archive", frozenset({"*"}), docs)
+            )
+        return tuple(rules)
+
+    def validate_payload(
+        self, installation: GameInstallation, rule: InstallRule, paths: tuple[str, ...]
+    ) -> EnvironmentReport:
+        issues = []
+        folded = {path.casefold() for path in paths}
+        if rule.rule_id == "palworld-ue4ss":
+            issues.append(
+                EnvironmentIssue(
+                    "ue4ss_order", "enabled.txt activation does not configure UE4SS load ordering"
+                )
+            )
+            roots = {path.split("/")[0] for path in folded}
+            for root in roots:
+                if not any(
+                    f"{root}/{marker}" in folded for marker in ("scripts/main.lua", "dlls/main.dll")
+                ):
+                    issues.append(
+                        EnvironmentIssue(
+                            "ue4ss_layout",
+                            "UE4SS mods need Scripts/main.lua or dlls/main.dll in a mod directory",
+                            True,
+                        )
+                    )
+        else:
+            if any("/" in path for path in paths):
+                issues.append(
+                    EnvironmentIssue(
+                        "pak_layout",
+                        "Pak packages require a flat payload; choose an explicit archive prefix",
+                        True,
+                    )
+                )
+            for path in folded:
+                if path.endswith((".utoc", ".ucas")) and (
+                    path.rsplit(".", 1)[0] + ".utoc" not in folded
+                    or path.rsplit(".", 1)[0] + ".ucas" not in folded
+                ):
+                    issues.append(
+                        EnvironmentIssue(
+                            "iostore_pair",
+                            "IoStore payload requires both .utoc and .ucas files",
+                            True,
+                        )
+                    )
+        return EnvironmentReport(tuple(issues))
+
+    def auxiliary_files(
+        self, installation: GameInstallation, rule: InstallRule, paths: tuple[str, ...]
+    ) -> dict[str, bytes]:
+        if rule.rule_id != "palworld-ue4ss":
+            return {}
+        folded = {path.casefold() for path in paths}
+        roots = {path.split("/")[0] for path in paths}
+        return {
+            root + "/enabled.txt": b""
+            for root in roots
+            if root.casefold() + "/enabled.txt" not in folded
+        }
 
     def scan_mods(self, installation: GameInstallation) -> tuple[InstalledMod, ...]:
         if not self.validate(installation).valid:

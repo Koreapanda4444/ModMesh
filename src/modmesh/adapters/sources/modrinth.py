@@ -109,6 +109,8 @@ def _version(payload: object) -> ModVersion:
 
 
 class ModrinthSource(SourceAdapter):
+    version_filters = True
+
     descriptor = SourceDescriptor(
         "modrinth",
         "Modrinth",

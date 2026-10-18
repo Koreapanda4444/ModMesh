@@ -146,6 +146,8 @@ def _version(data: dict[str, object], project: dict[str, object]) -> ModVersion 
 
 
 class CurseForgeSource(SourceAdapter):
+    version_filters = True
+
     descriptor = SourceDescriptor(
         "curseforge", "CurseForge", frozenset({"minecraft"}), frozenset(SourceCapability)
     )
