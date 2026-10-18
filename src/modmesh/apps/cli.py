@@ -33,10 +33,11 @@ from modmesh.core.identity import IdentityRegistry
 from modmesh.core.installation import InstallationManager
 from modmesh.core.matching import ProjectMatcher
 from modmesh.core.planning import InstallInput
+from modmesh.core.removal import RemovalManager
 from modmesh.core.resolver import DependencyResolution, DependencyResolver, ResolvedMod
 from modmesh.core.search import SearchState, UnifiedSearch
 from modmesh.core.sources import SearchRequest, SearchSort, SourceRegistry, VersionQuery
-from modmesh.domain.models import GameInstallation, ModVersion
+from modmesh.domain.models import GameInstallation, ModVersion, SourceRef
 from modmesh.storage.metadata import MetadataStore
 
 
@@ -97,8 +98,12 @@ def main() -> int:
     download.add_argument("--progress", action="store_true", help="Emit progress JSON to stderr")
     cache_command = commands.add_parser("cache", help="Inspect or safely clean owned cache objects")
     cache_command.add_argument("action", choices=("info", "verify", "prune", "clear"))
-    for name in ("installed", "recover"):
-        operation = commands.add_parser(name)
+    remove = commands.add_parser("remove", help="Review and apply tracked mod removal")
+    remove.add_argument("--source", required=True)
+    remove.add_argument("--project", required=True)
+    remove.add_argument("--apply", metavar="FINGERPRINT")
+    for name in ("installed", "recover", "remove"):
+        operation = remove if name == "remove" else commands.add_parser(name)
         operation.add_argument("--game", required=True)
         operation.add_argument("--path", type=Path, required=True)
     args = parser.parse_args()
@@ -107,7 +112,7 @@ def main() -> int:
     try:
         settings = load_client_settings(args.config)
         configure_logging(level=settings.log_level)
-        if args.command in {"installed", "recover"}:
+        if args.command in {"installed", "recover", "remove"}:
             games = create_game_registry()
             installation = games.get(args.game).inspect(
                 args.path.expanduser().resolve(), current_platform()
@@ -116,7 +121,15 @@ def main() -> int:
                 raise ModMeshError(
                     ErrorCode.VALIDATION, "Path is not a supported game installation"
                 )
-            manager = InstallationManager(games, installation)
+            manager = RemovalManager(games, installation)
+            if args.command == "remove":
+                removal = manager.plan_removal((SourceRef(args.source, args.project),))
+                payload = asdict(removal)
+                payload.update(applicable=removal.applicable, fingerprint=removal.fingerprint)
+                if args.apply:
+                    payload["operation"] = asdict(manager.remove(removal, args.apply))
+                print(json.dumps(_without_urls(payload), ensure_ascii=False, default=str))
+                return 0 if removal.applicable else 1
             if args.command == "installed":
                 installed_mods = manager.installed()
                 print(

@@ -13,6 +13,7 @@ from tempfile import TemporaryDirectory
 import httpx
 
 import modmesh.core.installation as installation_engine
+import modmesh.core.removal as removal_engine
 from modmesh.adapters.games.palworld import PalworldAdapter
 from modmesh.core.cache import ArtifactCache
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
@@ -21,6 +22,7 @@ from modmesh.core.games import GameRegistry
 from modmesh.core.hashing import verify_file
 from modmesh.core.installation import InstallationManager
 from modmesh.core.planning import InstallationPlanner, InstallInput
+from modmesh.core.removal import RemovalManager
 from modmesh.core.resolver import DependencyResolution, ResolvedMod
 from modmesh.core.sources import DownloadAccess, DownloadMode
 from modmesh.domain.artifacts import FileHash, HashAlgorithm
@@ -405,6 +407,26 @@ def install_crash(root: Path, mode: str) -> None:
     manager.apply(plan, plan.fingerprint, replace_existing=True)
 
 
+def removal_crash(root: Path, mode: str) -> None:
+    manager, resolution, inputs = temporary_installation(root)
+    target = root / "Pal/Content/Paks/~mods/One.pak"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"original")
+    plan = manager.plan(resolution, inputs, replace_existing=True)
+    manager.apply(plan, plan.fingerprint, replace_existing=True)
+    remover = RemovalManager(manager.games, manager.installation)
+    removal = remover.plan_removal((resolution.mods[0].project.reference,))
+    publish = removal_engine.publish_file
+
+    def interrupt(temporary: Path, destination: Path) -> None:
+        if mode == "after":
+            publish(temporary, destination)
+        os._exit(78)
+
+    removal_engine.publish_file = interrupt
+    remover.remove(removal, removal.fingerprint)
+
+
 def check_installation(root: Path) -> None:
     manager, resolution, inputs = temporary_installation(root / "normal")
     target = manager.root / "Pal/Content/Paks/~mods/One.pak"
@@ -437,6 +459,22 @@ def check_installation(root: Path) -> None:
     assert target.read_bytes() == b"new one" and len(manager.installed()) == 1
     assert manager.installed()[0].mod == resolution.mods[0]
     assert not manager.recover()
+    remover = RemovalManager(manager.games, manager.installation)
+    removal = remover.plan_removal((resolution.mods[0].project.reference,))
+    assert removal.applicable, removal.issues
+    target.write_bytes(b"user edit")
+    assert not remover.plan_removal((resolution.mods[0].project.reference,)).applicable
+    try:
+        remover.remove(removal, removal.fingerprint)
+    except ModMeshError:
+        pass
+    else:
+        raise AssertionError("Removal accepted a stale plan")
+    target.write_bytes(b"new one")
+    removal = remover.plan_removal((resolution.mods[0].project.reference,))
+    remover.remove(removal, removal.fingerprint)
+    assert target.read_bytes() == b"user original"
+    assert not (target.parent / "Two.pak").exists() and not remover.installed()
     for mode in ("before", "after"):
         game = root / mode
         manager, resolution, inputs = temporary_installation(game)
@@ -455,6 +493,24 @@ def check_installation(root: Path) -> None:
         assert target.read_bytes() == b"crash original" and not manager.installed()
         assert not (target.parent / "Two.pak").exists() and not manager.recover()
 
+    for mode in ("before", "after"):
+        game = root / f"removal-{mode}"
+        child = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "--removal-crash", str(game), mode],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert child.returncode == 78, child.stderr
+        installation = PalworldAdapter().inspect(game, Platform.WINDOWS)
+        assert installation is not None
+        manager = InstallationManager(manager.games, installation)
+        recovered = manager.recover()
+        assert len(recovered) == 1 and recovered[0].state == "rolled_back", recovered
+        assert (game / "Pal/Content/Paks/~mods/One.pak").read_bytes() == b"new one"
+        assert (game / "Pal/Content/Paks/~mods/Two.pak").read_bytes() == b"new two"
+        assert len(manager.installed()) == 1 and not manager.recover()
+
 
 async def main() -> None:
     logging.disable(logging.CRITICAL)
@@ -470,6 +526,8 @@ async def main() -> None:
 if __name__ == "__main__":
     if len(sys.argv) == 4 and sys.argv[1] == "--install-crash":
         install_crash(Path(sys.argv[2]), sys.argv[3])
+    elif len(sys.argv) == 4 and sys.argv[1] == "--removal-crash":
+        removal_crash(Path(sys.argv[2]), sys.argv[3])
     elif len(sys.argv) == 3 and sys.argv[1] == "--cache-worker":
         asyncio.run(cache_worker(Path(sys.argv[2])))
     else:

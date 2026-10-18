@@ -661,8 +661,9 @@ class InstallationManager:
                 continue
             try:
                 target = target_path(self.root, string_record(step["path"]))
-                stage_proof = object_record(step["stage"])
-                if target.exists() and _same(target, stage_proof):
+                stage_value = step.get("stage")
+                stage_proof = object_record(stage_value) if stage_value is not None else None
+                if stage_proof is not None and target.exists() and _same(target, stage_proof):
                     withdrawn = self._slot(operation, "withdrawn", index)
                     if withdrawn.exists():
                         raise ModMeshError(ErrorCode.CONFLICT, "Recovery file slot is occupied")
