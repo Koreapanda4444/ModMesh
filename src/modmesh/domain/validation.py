@@ -1,5 +1,3 @@
-"""Shared validation for normalized domain values."""
-
 import re
 from pathlib import PurePosixPath, PureWindowsPath
 from urllib.parse import urlsplit

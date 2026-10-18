@@ -1,10 +1,3 @@
-"""Verified content-addressed cache. Only indexed, owned inodes may be removed.
-
-The reserved namespace is never adopted if it already contains unrelated data.
-Unindexed/replaced objects are preserved. A prepublication inode record lets a
-later access recover missing objects after interruption without guessing paths.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -329,7 +322,6 @@ class ArtifactCache:
                 if (file.size is not None and size != file.size) or any(
                     actual[value.algorithm] != value for value in file.hashes
                 ):
-                    # Changed upstream metadata is a miss, not evidence to erase shared bytes.
                     continue
                 if size > self.max_bytes:
                     raise ModMeshError(ErrorCode.VALIDATION, "Artifact exceeds the cache capacity")
@@ -469,7 +461,7 @@ class ArtifactCache:
                 )
                 self._prune(self.max_bytes - artifact.size)
                 identity = temporary.stat()
-                # Record inode proof first. A crash before publication becomes a safe cache miss.
+
                 self._store.put(
                     _OBJECTS,
                     sha,
@@ -504,7 +496,7 @@ class ArtifactCache:
         if file.size is not None and file.size > self.max_bytes:
             raise ModMeshError(ErrorCode.VALIDATION, "Artifact exceeds the cache capacity")
         self._layout()
-        # Same native file or common strong expected hash shares a cross-process lease.
+
         strong = sorted(
             (value for value in file.hashes if value.strong),
             key=lambda value: value.algorithm.value,

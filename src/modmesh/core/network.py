@@ -1,5 +1,3 @@
-"""Bounded async API requests with per-origin credentials, retries and throttling."""
-
 from __future__ import annotations
 
 import asyncio

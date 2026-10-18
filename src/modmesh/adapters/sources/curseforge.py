@@ -1,5 +1,3 @@
-"""Approved CurseForge API access. Distribution restrictions are never bypassed."""
-
 import re
 from urllib.parse import urlsplit
 

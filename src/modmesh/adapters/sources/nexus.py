@@ -1,9 +1,3 @@
-"""Nexus public v3 trending feed and documented v1 metadata/download access.
-
-REST has no general catalog text-search endpoint. Trending filtering is labelled
-as a limited feed and always offers the official catalog as a handoff.
-"""
-
 import re
 from urllib.parse import urlsplit
 

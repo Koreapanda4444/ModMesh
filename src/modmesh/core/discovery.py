@@ -1,5 +1,3 @@
-"""Read-only, bounded game discovery with explicit manual path registration."""
-
 from __future__ import annotations
 
 import sys

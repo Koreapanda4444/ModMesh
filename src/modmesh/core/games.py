@@ -1,5 +1,3 @@
-"""Game integration contracts. The core contains no game-specific IDs or paths."""
-
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -79,20 +77,20 @@ class GameAdapter(ABC):
     @property
     @abstractmethod
     def game(self) -> Game:
-        """Supported edition/platform metadata; listing it is not a release support claim."""
+        pass
 
     @property
     @abstractmethod
     def capabilities(self) -> frozenset[GameCapability]:
-        """Only capabilities actually implemented by this adapter."""
+        pass
 
     @abstractmethod
     def candidates(self, context: DiscoveryContext) -> Iterable[Path]:
-        """Yield bounded candidate locations; never recursively scan entire drives."""
+        pass
 
     @abstractmethod
     def inspect(self, path: Path, platform: Platform) -> GameInstallation | None:
-        """Read-only identification. Return None when the installation is not recognized."""
+        pass
 
     def validate(self, installation: GameInstallation) -> EnvironmentReport:
         issues: list[EnvironmentIssue] = []

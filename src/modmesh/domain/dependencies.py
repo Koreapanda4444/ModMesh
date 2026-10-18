@@ -1,5 +1,3 @@
-"""Dependency declarations; solving and range interpretation are separate concerns."""
-
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -77,5 +75,4 @@ class Dependency:
 
     @property
     def resolvable(self) -> bool:
-        """A valid upstream declaration may still lack IDs needed by a resolver."""
         return bool(self.target.project_id or self.target.version_id or self.target.canonical_id)

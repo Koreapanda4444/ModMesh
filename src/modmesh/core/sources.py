@@ -1,5 +1,3 @@
-"""Asynchronous source contracts with explicit policy and credential capabilities."""
-
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -119,7 +117,7 @@ class SourceAdapter(ABC):
     @property
     @abstractmethod
     def descriptor(self) -> SourceDescriptor:
-        """Static source metadata. Actual access is described by status()."""
+        pass
 
     def status(self, game_id: str) -> SourceStatus:
         if game_id not in self.descriptor.games:
@@ -178,7 +176,6 @@ class SourceAdapter(ABC):
         raise ModMeshError(ErrorCode.UNSUPPORTED, "Downloads are not implemented for this source")
 
     async def aclose(self) -> None:
-        """Release resources owned by this adapter."""
         return None
 
 

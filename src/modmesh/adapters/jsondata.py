@@ -1,5 +1,3 @@
-"""Strict helpers at the untrusted API JSON / domain model boundary."""
-
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 
 

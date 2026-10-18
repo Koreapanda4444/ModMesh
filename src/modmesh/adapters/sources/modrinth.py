@@ -1,5 +1,3 @@
-"""Minecraft Java mods via the official Modrinth v2 API."""
-
 import json
 import re
 from urllib.parse import quote, urlsplit

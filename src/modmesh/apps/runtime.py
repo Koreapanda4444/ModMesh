@@ -1,5 +1,3 @@
-"""Composition root. Concrete adapters are registered as their milestones land."""
-
 import os
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager

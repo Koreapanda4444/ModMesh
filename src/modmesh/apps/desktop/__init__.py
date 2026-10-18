@@ -1,1 +1,0 @@
-"""ModMesh desktop application."""

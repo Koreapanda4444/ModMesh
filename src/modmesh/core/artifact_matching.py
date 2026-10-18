@@ -1,9 +1,3 @@
-"""Merge install candidates only with compatible context and shared strong hashes.
-
-These are source-reported expected hashes. Downloaded bytes must still be
-verified before use. Equal labels, SHA-1, or MD5 alone never establish equality.
-"""
-
 from collections.abc import Sequence
 from dataclasses import dataclass
 

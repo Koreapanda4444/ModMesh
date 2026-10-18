@@ -1,5 +1,3 @@
-"""Read-only Steam library/ACF discovery. Never invokes Steam or downloads files."""
-
 from __future__ import annotations
 
 import logging

@@ -1,5 +1,3 @@
-"""FastAPI bootstrap; business APIs are introduced in the server milestones."""
-
 import argparse
 import asyncio
 import json

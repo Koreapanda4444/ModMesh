@@ -1,5 +1,3 @@
-"""Content identity and upstream verification evidence."""
-
 import re
 from dataclasses import dataclass
 from enum import StrEnum

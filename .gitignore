@@ -13,3 +13,9 @@ dist/
 .vscode/
 .mypy_cache/
 .ruff_cache/
+/.python-version
+/AGENTS.md
+/docs/development-plan.md
+/docs/roadmap.md
+/docs/verification.md
+/src/modmesh/py.typed

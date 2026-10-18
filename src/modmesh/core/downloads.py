@@ -1,9 +1,3 @@
-"""Queued verified downloads, with cooperative cancellation and no-clobber publication.
-
-Only explicitly scoped source CDN domains are accepted. DNS is screened before
-each request/redirect; this is not a general-purpose arbitrary-URL downloader.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -194,7 +188,6 @@ async def _blocking[T](function: Callable[[], T], cancelled: threading.Event) ->
 
 
 def publish_file(temporary: Path, destination: Path) -> None:
-    """Publish on the same filesystem without replacing any existing entry."""
     try:
         os.link(temporary, destination)
     except FileExistsError as exc:

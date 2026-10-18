@@ -1,5 +1,3 @@
-"""Normalized game/mod models. Display names never establish identity."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field

@@ -1,5 +1,3 @@
-"""Concurrent source search, retaining per-source pages, limits and failures."""
-
 import asyncio
 import logging
 import math

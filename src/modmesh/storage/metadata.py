@@ -1,9 +1,3 @@
-"""Transactional SQLite metadata repository using SQLAlchemy Core.
-
-Version 1 stores namespaced JSON records. Domain repositories can share one
-transaction without coupling the schema to models that have not been introduced.
-"""
-
 from __future__ import annotations
 
 import json

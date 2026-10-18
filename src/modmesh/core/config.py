@@ -1,5 +1,3 @@
-"""Validated TOML/environment configuration with no network or write side effects."""
-
 from __future__ import annotations
 
 import os
@@ -16,8 +14,6 @@ from modmesh.domain.validation import require_id
 
 
 class ConfigurationError(ModMeshError, ValueError):
-    """Configuration is invalid; messages must never contain secret values."""
-
     def __init__(self, message: str) -> None:
         super().__init__(ErrorCode.CONFIGURATION, message)
 

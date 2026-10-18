@@ -1,5 +1,3 @@
-"""Core command-line access while the full desktop views are being implemented."""
-
 import argparse
 import asyncio
 import json

@@ -1,5 +1,3 @@
-"""Offline regressions for file loss/corruption risks; temporary directories only."""
-
 import asyncio
 import hashlib
 import logging
@@ -84,7 +82,7 @@ async def check_downloads(root: Path) -> None:
         else:
             raise AssertionError("Corrupt bytes were published")
         assert not (root / "bad.bin").exists()
-        # A late-created destination must also survive publication races.
+
         raced = root / "raced.bin"
 
         def occupy(event) -> None:
@@ -173,7 +171,7 @@ async def check_cache(root: Path) -> None:
             assert exc.code == ErrorCode.CONFLICT
         else:
             raise AssertionError("Cache export overwrote a user file")
-        # Equal expected strong hashes deduplicate across native source IDs.
+
         alias = replace(FILE, project=SourceRef("other", "project"), file_id="other-file")
         assert (await cache.obtain(alias, fetch)).cache_hit and fetches == 1
         changed = replace(FILE, hashes=(FileHash(HashAlgorithm.SHA256, "0" * 64),))
@@ -182,7 +180,7 @@ async def check_cache(root: Path) -> None:
         assert cache.lookup(FILE) is None and not first.path.exists()
         repaired = await cache.obtain(FILE, fetch)
         assert not repaired.cache_hit and fetches == 2
-        # Replacement inodes and unknown files belong to the user, even in the namespace.
+
         replacement = root / "replacement"
         replacement.write_bytes(b"user replacement")
         repaired.path.unlink()
@@ -206,7 +204,7 @@ async def check_cache(root: Path) -> None:
     else:
         raise AssertionError("Nonempty namespace was adopted")
     assert (unowned / "keep").read_bytes() == b"user data"
-    # Capacity eviction removes only the older indexed artifact.
+
     with ArtifactCache(root / "quota", max_bytes=len(DATA)) as cache:
         old = await cache.obtain(FILE, fetch)
         content = b"new artifact"

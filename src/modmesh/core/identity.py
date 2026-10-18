@@ -1,5 +1,3 @@
-"""Persistent, evidence-backed source ID bindings; no name-based inference."""
-
 import json
 from dataclasses import dataclass
 from enum import StrEnum
@@ -98,7 +96,6 @@ class IdentityRegistry:
             )
 
     def unbind(self, game_id: str, reference: SourceRef) -> bool:
-        """An explicit user separation removes the binding without deleting any files."""
         with self.store.transaction(write=True) as transaction:
             return transaction.delete("identity.bindings", _key(game_id, reference))
 

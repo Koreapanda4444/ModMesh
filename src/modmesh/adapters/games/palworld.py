@@ -1,5 +1,3 @@
-"""Windows Steam Palworld identification; semantic versions are never guessed."""
-
 from collections.abc import Iterable
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5

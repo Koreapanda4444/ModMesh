@@ -1,5 +1,3 @@
-"""Bounded-memory hashing, cancellation, and complete expected-hash verification."""
-
 import hashlib
 import os
 import stat

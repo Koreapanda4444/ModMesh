@@ -1,5 +1,3 @@
-"""Confirmed identity grouping and explicitly unconfirmed cross-source candidates."""
-
 import json
 import re
 from collections.abc import Sequence

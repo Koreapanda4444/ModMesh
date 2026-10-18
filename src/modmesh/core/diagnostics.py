@@ -1,5 +1,3 @@
-"""Application errors and structured diagnostics with credential redaction."""
-
 import json
 import logging
 import re
@@ -42,7 +40,6 @@ _secret_lock = threading.Lock()
 
 
 def register_secret(value: str) -> None:
-    """Register credentials before use; short values are still masked by field name."""
     if len(value) >= 4:
         with _secret_lock:
             _secrets.add(value)

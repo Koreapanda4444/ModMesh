@@ -1,5 +1,3 @@
-"""Qt entry point. Slow work belongs in workers, never in this event loop."""
-
 import argparse
 import json
 import sys

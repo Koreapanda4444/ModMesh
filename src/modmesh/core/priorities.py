@@ -1,5 +1,3 @@
-"""Game-scoped source order and permission-aware fallback for identical content."""
-
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
