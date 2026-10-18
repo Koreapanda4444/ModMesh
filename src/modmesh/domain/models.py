@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
+from modmesh.domain.artifacts import FileHash, HashAlgorithm
 
 
 def require_text(value: str, field_name: str) -> None:
@@ -155,6 +156,7 @@ class ModFile:
     filename: str
     size: int | None = None
     download_url: str | None = field(default=None, repr=False)
+    hashes: tuple[FileHash, ...] = ()
 
     def __post_init__(self) -> None:
         require_text(self.file_id, "source file ID")
@@ -168,6 +170,8 @@ class ModFile:
         if self.size is not None and (isinstance(self.size, bool) or self.size < 0):
             raise ModMeshError(ErrorCode.VALIDATION, "File size cannot be negative")
         _web_url(self.download_url)
+        if len({value.algorithm for value in self.hashes}) != len(self.hashes):
+            raise ModMeshError(ErrorCode.VALIDATION, "Duplicate file hash algorithm")
 
 
 @dataclass(frozen=True)
@@ -193,9 +197,12 @@ class ModVersion:
 class InstalledFile:
     path: str
     managed: bool
+    sha256: FileHash | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "path", relative_path(self.path))
+        if self.sha256 is not None and self.sha256.algorithm != HashAlgorithm.SHA256:
+            raise ModMeshError(ErrorCode.VALIDATION, "Installed file identity requires SHA-256")
 
 
 @dataclass(frozen=True)
