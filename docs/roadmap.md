@@ -9,7 +9,7 @@
 | 03 | 완료 | `feat: add application configuration` | 앱·서버 설정, 환경별 구성, 검증. |
 | 04 | 완료 | `feat: add logging and error handling` | 공통 구조화 오류/로그, 보안 마스킹. |
 | 05 | 완료 | `feat: initialize local metadata storage` | SQLite 스키마·마이그레이션 및 저장 계층. |
-| 06 | 예정 | `feat: define game and mod domain models` | 게임·모드·설치/버전/파일 모델. |
+| 06 | 완료 | `feat: define game and mod domain models` | 게임·모드·설치/버전/파일 모델. |
 | 07 | 예정 | `feat: add canonical mod identity` | 출처 간 동일 모드 식별 근거. |
 | 08 | 예정 | `feat: add file hash and artifact identity` | SHA-256/Artifact 식별·무결성. |
 | 09 | 예정 | `feat: define dependency relationships` | required/optional/incompatible/embedded 관계. |
