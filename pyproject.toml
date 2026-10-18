@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools==80.9.0", "wheel==0.45.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "modmesh"
+version = "0.1.0.dev0"
+description = "Game-independent desktop mod management"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = ["httpx==0.28.1", "SQLAlchemy==2.1.5"]
+
+[project.optional-dependencies]
+desktop = ["PySide6-Essentials==6.12.0"]
+server = ["fastapi==0.118.0", "uvicorn==0.54.0"]
+dev = ["ruff==0.17.1", "mypy==2.4.0", "setuptools==80.9.0", "wheel==0.45.1"]
+
+[project.scripts]
+modmesh = "modmesh.apps.desktop.main:main"
+modmesh-server = "modmesh.apps.server.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+modmesh = ["py.typed"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src"]
+
