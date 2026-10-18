@@ -23,9 +23,10 @@ from modmesh.core.hashing import verify_file
 from modmesh.core.installation import InstallationManager
 from modmesh.core.planning import InstallationPlanner, InstallInput
 from modmesh.core.removal import RemovalManager
-from modmesh.core.resolver import DependencyResolution, ResolvedMod
+from modmesh.core.resolver import DependencyEdge, DependencyResolution, ResolvedMod
 from modmesh.core.sources import DownloadAccess, DownloadMode
 from modmesh.domain.artifacts import FileHash, HashAlgorithm
+from modmesh.domain.dependencies import Dependency, DependencyKind, DependencyTarget
 from modmesh.domain.models import ModFile, ModVersion, Platform, SourceProject, SourceRef
 
 DATA = b"verified bytes\x00" * 40000
@@ -512,6 +513,55 @@ def check_installation(root: Path) -> None:
         assert len(manager.installed()) == 1 and not manager.recover()
 
 
+def check_shared_dependencies(root: Path) -> None:
+    manager, resolution, inputs = temporary_installation(root)
+    base = resolution.mods[0]
+    plan = manager.plan(resolution, inputs)
+    manager.apply(plan, plan.fingerprint)
+    source = root.parent / "dependent.pak"
+    source.write_bytes(b"dependent")
+    reference = SourceRef("example", "dependent")
+    file = ModFile(reference, "d", source.name, source.stat().st_size)
+    declaration = Dependency(DependencyKind.REQUIRED, DependencyTarget("example", "p"))
+    version = ModVersion(
+        reference, "1", "1", files=(file,), dependencies=(declaration,), dependencies_known=True
+    )
+    mod = ResolvedMod(SourceProject(reference, "palworld", "dependent"), version, file, True)
+    combined = replace(
+        resolution,
+        mods=(base, mod),
+        edges=(DependencyEdge(reference, base.project.reference, declaration),),
+    )
+    plan = manager.plan(combined, (*inputs, InstallInput(mod, source, "palworld-pak")))
+    assert plan.applicable, plan.issues
+    manager.apply(plan, plan.fingerprint)
+    remover = RemovalManager(manager.games, manager.installation)
+    blocked = remover.plan_removal((base.project.reference,))
+    assert not blocked.applicable and any(issue.code == "required_by" for issue in blocked.issues)
+    removal = remover.plan_removal((reference,))
+    remover.remove(removal, removal.fingerprint)
+    assert len(manager.installed()) == 1 and (root / "Pal/Content/Paks/~mods/One.pak").exists()
+    shared_ref = SourceRef("example", "shared")
+    shared_file = replace(base.file, project=shared_ref)
+    shared_mod = ResolvedMod(
+        replace(base.project, reference=shared_ref),
+        replace(base.version, project=shared_ref, files=(shared_file,)),
+        shared_file,
+        True,
+    )
+    shared_resolution = replace(resolution, mods=(shared_mod,))
+    plan = manager.plan(shared_resolution, (replace(inputs[0], mod=shared_mod),))
+    assert plan.applicable, plan.issues
+    manager.apply(plan, plan.fingerprint)
+    removal = remover.plan_removal((base.project.reference,))
+    assert all(change.action == "release" for change in removal.changes)
+    remover.remove(removal, removal.fingerprint)
+    assert (root / "Pal/Content/Paks/~mods/One.pak").exists()
+    removal = remover.plan_removal((shared_ref,))
+    remover.remove(removal, removal.fingerprint)
+    assert not manager.installed() and not (root / "Pal/Content/Paks/~mods/One.pak").exists()
+
+
 async def main() -> None:
     logging.disable(logging.CRITICAL)
     with TemporaryDirectory(prefix="modmesh-safety-") as name:
@@ -520,6 +570,7 @@ async def main() -> None:
         await check_processes(Path(name) / "processes")
         check_planning(Path(name))
         check_installation(Path(name) / "installation")
+        check_shared_dependencies(Path(name) / "shared")
     print("Download, cache, plan and installation/recovery safety checks passed")
 
 

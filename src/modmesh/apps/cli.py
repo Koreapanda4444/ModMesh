@@ -102,6 +102,13 @@ def main() -> int:
     remove.add_argument("--source", required=True)
     remove.add_argument("--project", required=True)
     remove.add_argument("--apply", metavar="FINGERPRINT")
+    remove.add_argument(
+        "--also",
+        action="append",
+        default=[],
+        metavar="SOURCE:PROJECT",
+        help="Explicitly include another managed mod in the removal plan",
+    )
     for name in ("installed", "recover", "remove"):
         operation = remove if name == "remove" else commands.add_parser(name)
         operation.add_argument("--game", required=True)
@@ -123,7 +130,13 @@ def main() -> int:
                 )
             manager = RemovalManager(games, installation)
             if args.command == "remove":
-                removal = manager.plan_removal((SourceRef(args.source, args.project),))
+                references = [SourceRef(args.source, args.project)]
+                for value in args.also:
+                    source_id, separator, project_id = value.partition(":")
+                    if not separator or not source_id or not project_id:
+                        raise ModMeshError(ErrorCode.VALIDATION, "--also requires SOURCE:PROJECT")
+                    references.append(SourceRef(source_id, project_id))
+                removal = manager.plan_removal(references)
                 payload = asdict(removal)
                 payload.update(applicable=removal.applicable, fingerprint=removal.fingerprint)
                 if args.apply:

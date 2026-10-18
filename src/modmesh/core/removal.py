@@ -123,6 +123,21 @@ class RemovalManager(InstallationManager):
                     issues.append(
                         PlanIssue("missing_ownership", "File ownership is incomplete", path)
                     )
+        if store is not None:
+            for key, value in store.list("install.mods"):
+                if key in selected:
+                    continue
+                dependent = ManagedMod.read(value)
+                protected = selected.intersection(mod_key(ref) for ref in dependent.dependencies)
+                if protected:
+                    issues.append(
+                        PlanIssue(
+                            "required_by",
+                            f"Required by installed mod: {dependent.mod.project.name} ({key})",
+                        )
+                    )
+                if not dependent.mod.version.dependencies_known:
+                    warnings.append(f"Unverified dependencies for: {dependent.mod.project.name}")
         for record in files.values():
             owners = tuple(string_record(owner) for owner in array_record(record["owners"]))
             if not selected.intersection(owners):

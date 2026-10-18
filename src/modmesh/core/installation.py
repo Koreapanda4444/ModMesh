@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Protocol
 
 from modmesh.core.cache import _Lease
+from modmesh.core.conflicts import analyze_dependencies
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.downloads import publish_file
 from modmesh.core.games import GameRegistry
@@ -30,6 +31,7 @@ from modmesh.core.planning import (
 )
 from modmesh.core.resolver import DependencyResolution
 from modmesh.domain.artifacts import FileHash, HashAlgorithm
+from modmesh.domain.dependencies import DependencyKind
 from modmesh.domain.models import GameInstallation
 from modmesh.storage.installed import (
     ManagedMod,
@@ -262,6 +264,15 @@ class InstallationManager:
                             "This update needs a removal plan for previous file paths",
                         )
                     )
+        if store is not None:
+            remaining = tuple(
+                ManagedMod.read(value).mod
+                for key, value in store.list("install.mods")
+                if key not in installing
+            )
+            for conflict in analyze_dependencies(resolution, remaining).issues:
+                if conflict.blocking:
+                    issues.append(PlanIssue(conflict.code, conflict.message))
         for change in plan.changes:
             if change.destination.split("/")[0].casefold() == _STATE:
                 issues.append(
@@ -290,7 +301,7 @@ class InstallationManager:
             others = (
                 set(string_record(owner) for owner in array_record(record["owners"])) - installing
             )
-            if others and change.action == "replace":
+            if others and change.sha256 != record["sha256"]:
                 issues.append(
                     PlanIssue(
                         "shared_target",
@@ -605,6 +616,7 @@ class InstallationManager:
                                 edge.target
                                 for edge in plan.resolution.edges
                                 if edge.parent == reference
+                                and edge.declaration.kind == DependencyKind.REQUIRED
                             )
                         )
                         paths = tuple(
