@@ -1,40 +1,352 @@
+from __future__ import annotations
+
 import argparse
 import json
+import os
 import sys
+import threading
+import time
+from collections.abc import Callable
 from contextlib import nullcontext
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from PySide6.QtCore import QTimer, qVersion
-from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QVBoxLayout, QWidget
+from PySide6.QtGui import QCloseEvent
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QComboBox,
+    QFileDialog,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QMainWindow,
+    QPushButton,
+    QSplitter,
+    QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 from modmesh import __version__
-from modmesh.core.config import ConfigurationError, load_client_settings
+from modmesh.apps.desktop.workers import Worker
+from modmesh.apps.runtime import create_game_registry
+from modmesh.core.config import ClientSettings, ConfigurationError, load_client_settings
 from modmesh.core.diagnostics import configure_logging, install_exception_hook
+from modmesh.core.discovery import (
+    DiscoveryEngine,
+    DiscoveryRecord,
+    DiscoveryResult,
+    current_platform,
+)
+from modmesh.core.games import DiscoveryContext, GameRegistry
 from modmesh.storage.metadata import MetadataStore
 
 
+def table(headers: tuple[str, ...]) -> QTableWidget:
+    widget = QTableWidget(0, len(headers))
+    widget.setHorizontalHeaderLabels(headers)
+    widget.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+    widget.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+    widget.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    widget.setAlternatingRowColors(True)
+    widget.setShowGrid(False)
+    widget.verticalHeader().hide()
+    widget.verticalHeader().setDefaultSectionSize(42)
+    widget.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+    return widget
+
+
+def fill_row(widget: QTableWidget, row: int, values: tuple[str, ...]) -> None:
+    for column, value in enumerate(values):
+        item = QTableWidgetItem(value)
+        item.setToolTip(value)
+        widget.setItem(row, column, item)
+
+
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        settings: ClientSettings,
+        store: MetadataStore,
+        *,
+        games: GameRegistry | None = None,
+        context: DiscoveryContext | None = None,
+        auto_discover: bool = True,
+    ) -> None:
         super().__init__()
+        self.settings = settings
+        self.store = store
+        self.games = games or create_game_registry()
+        self.context = context or DiscoveryContext(current_platform(), environment=os.environ)
+        self.records: tuple[DiscoveryRecord, ...] = ()
+        self.workers: set[Worker] = set()
+        self.discovery_done = False
         self.setWindowTitle("ModMesh")
-        self.resize(1120, 740)
-        self.setMinimumSize(800, 520)
+        self.resize(1240, 780)
+        self.setMinimumSize(1000, 620)
         self.setStyleSheet(
-            "QWidget { background: #171c24; color: #e9edf4; font-size: 14px; }"
-            "QLabel#title { font-size: 36px; font-weight: bold; color: #89b4fa; }"
+            "QWidget {background:#151b25;color:#e5eaf3;font-size:14px;}"
+            "QLabel#brand {font-size:28px;font-weight:700;color:#82e2c2;}"
+            "QLabel#heading {font-size:24px;font-weight:600;}"
+            "QLabel#muted {color:#a1aec2;}"
+            "QPushButton,QComboBox,QLineEdit {background:#263245;border:1px solid #39485f;"
+            "border-radius:5px;padding:9px;} QPushButton:hover {background:#35465e;}"
+            "QPushButton:disabled {color:#73829a;} QPushButton#primary {background:#286956;}"
+            "QListWidget {border:0;background:#101620;padding:12px;min-width:145px;}"
+            "QListWidget::item {padding:14px;} QListWidget::item:selected {background:#26394a;}"
+            "QTableWidget {border:1px solid #2b3749;background:#192230;"
+            "alternate-background-color:#1d2838;selection-background-color:#304b63;}"
+            "QHeaderView::section {background:#253245;border:0;padding:12px;color:#b7c7dc;}"
+            "QTextEdit {border:1px solid #2b3749;background:#192230;padding:12px;}"
+            "QStatusBar {color:#a1aec2;}"
         )
         content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(36, 36, 36, 36)
-        title = QLabel("ModMesh")
-        title.setObjectName("title")
-        layout.addWidget(title)
-        layout.addWidget(QLabel("게임과 모드 배포처를 연결하는 모드 매니저"))
-        layout.addWidget(QLabel("개발 초기 단계 · 게임 탐지와 모드 관리는 순서대로 추가됩니다."))
-        layout.addStretch()
+        outer = QVBoxLayout(content)
+        outer.setContentsMargins(20, 16, 20, 12)
+        header = QHBoxLayout()
+        brand = QLabel("ModMesh")
+        brand.setObjectName("brand")
+        header.addWidget(brand)
+        header.addSpacing(28)
+        self.game_selector = QComboBox()
+        self.game_selector.setMinimumWidth(360)
+        self.game_selector.addItem("게임을 선택하세요")
+        self.game_selector.currentIndexChanged.connect(self._select_game)
+        header.addWidget(self.game_selector)
+        header.addStretch()
+        header.addWidget(QLabel("게스트 · 로컬 모드 관리"))
+        outer.addLayout(header)
+        body = QHBoxLayout()
+        self.navigation = QListWidget()
+        self.navigation.addItem("내 게임")
+        self.navigation.setMaximumWidth(180)
+        body.addWidget(self.navigation)
+        self.pages = QStackedWidget()
+        self.navigation.currentRowChanged.connect(self.pages.setCurrentIndex)
+        body.addWidget(self.pages, 1)
+        self.library = QWidget()
+        library = QVBoxLayout(self.library)
+        heading = QLabel("내 게임")
+        heading.setObjectName("heading")
+        library.addWidget(heading)
+        subtitle = QLabel("설치 경로와 환경을 확인한 뒤 관리할 게임을 선택하세요.")
+        subtitle.setObjectName("muted")
+        library.addWidget(subtitle)
+        toolbar = QHBoxLayout()
+        self.rescan = QPushButton("다시 탐색")
+        self.rescan.clicked.connect(self.discover)
+        toolbar.addWidget(self.rescan)
+        self.manual_game = QComboBox()
+        for adapter in self.games.all():
+            self.manual_game.addItem(adapter.game.name, adapter.game.game_id)
+        toolbar.addWidget(self.manual_game)
+        self.manual_path = QLineEdit()
+        self.manual_path.setPlaceholderText("게임 설치 폴더")
+        self.manual_path.returnPressed.connect(self.register_manual)
+        toolbar.addWidget(self.manual_path, 1)
+        browse = QPushButton("찾기…")
+        browse.clicked.connect(self.browse)
+        toolbar.addWidget(browse)
+        self.add_path = QPushButton("경로 등록")
+        self.add_path.clicked.connect(self.register_manual)
+        toolbar.addWidget(self.add_path)
+        library.addLayout(toolbar)
+        split = QSplitter()
+        self.game_table = table(("게임", "환경", "상태"))
+        self.game_table.itemSelectionChanged.connect(self._table_game)
+        split.addWidget(self.game_table)
+        self.game_details = QTextEdit()
+        self.game_details.setReadOnly(True)
+        self.game_details.setMinimumWidth(270)
+        split.addWidget(self.game_details)
+        split.setSizes([600, 300])
+        library.addWidget(split, 1)
+        self.discovery_status = QLabel("게임 설치를 탐색할 준비가 되었습니다.")
+        self.discovery_status.setWordWrap(True)
+        library.addWidget(self.discovery_status)
+        self.pages.addWidget(self.library)
+        outer.addLayout(body, 1)
         self.setCentralWidget(content)
-        self.statusBar().showMessage(f"개발판 {__version__} · 게스트")
+        self.navigation.setCurrentRow(0)
+        self.statusBar().showMessage(f"개발판 {__version__} · 파일 변경은 계획 검토 후 적용됩니다.")
+        if auto_discover:
+            QTimer.singleShot(0, self.discover)
+
+    @property
+    def selected_game(self) -> DiscoveryRecord | None:
+        index = self.game_selector.currentIndex()
+        return self.records[index] if 0 <= index < len(self.records) else None
+
+    def start_work(
+        self,
+        work: Callable[[threading.Event], object],
+        completed: Callable[[object], None],
+        failed: Callable[[str], None] | None = None,
+    ) -> Worker:
+        worker = Worker(work)
+        self.workers.add(worker)
+        worker.succeeded.connect(completed)
+        worker.failed.connect(failed or self.show_error)
+        worker.finished.connect(lambda: self._worker_finished(worker))
+        worker.start()
+        return worker
+
+    def _worker_finished(self, worker: Worker) -> None:
+        self.workers.discard(worker)
+        worker.deleteLater()
+
+    def show_error(self, message: str) -> None:
+        self.statusBar().showMessage(message)
+        self.discovery_status.setText(message)
+
+    def browse(self) -> None:
+        value = QFileDialog.getExistingDirectory(self, "게임 설치 폴더")
+        if value:
+            self.manual_path.setText(value)
+
+    def register_manual(self) -> None:
+        path = self.manual_path.text().strip()
+        game_id = str(self.manual_game.currentData())
+        if path:
+            self.discover(manual=(game_id, Path(path)))
+
+    def discover(self, *, manual: tuple[str, Path] | None = None) -> None:
+        if not self.rescan.isEnabled():
+            return
+        self.rescan.setEnabled(False)
+        self.add_path.setEnabled(False)
+        self.discovery_done = False
+        self.discovery_status.setText("게임 경로와 환경을 확인하고 있습니다…")
+
+        def work(cancelled: threading.Event) -> DiscoveryResult:
+            with MetadataStore(self.settings.paths.database) as store:
+                engine = DiscoveryEngine(self.games, store)
+                if manual is not None:
+                    engine.register_manual(manual[0], manual[1], self.context)
+                return engine.discover(self.context, cancelled=cancelled.is_set)
+
+        self.start_work(work, self._discovered, self._discovery_failed)
+
+    def _discovery_failed(self, message: str) -> None:
+        self.rescan.setEnabled(True)
+        self.add_path.setEnabled(True)
+        self.discovery_done = True
+        self.show_error(message)
+
+    def _discovered(self, value: object) -> None:
+        assert isinstance(value, DiscoveryResult)
+        previous = self.selected_game
+        saved = self.store.get("desktop", "last_game") or {}
+        selected = str(previous.installation.path) if previous else saved.get("path")
+        selected_id = previous.installation.game_id if previous else saved.get("game_id")
+        self.records = value.records
+        self.game_selector.blockSignals(True)
+        self.game_selector.clear()
+        for record in self.records:
+            installation = record.installation
+            name = self.games.get(installation.game_id).game.name
+            self.game_selector.addItem(f"{name} · {installation.path.name}")
+        if not self.records:
+            self.game_selector.addItem("탐지된 게임이 없습니다")
+        index = next(
+            (
+                i
+                for i, record in enumerate(self.records)
+                if str(record.installation.path) == selected
+                and record.installation.game_id == selected_id
+            ),
+            0,
+        )
+        self.game_selector.setCurrentIndex(index)
+        self.game_selector.blockSignals(False)
+        missing = [
+            adapter
+            for adapter in self.games.all()
+            if not any(
+                record.installation.game_id == adapter.game.game_id for record in self.records
+            )
+        ]
+        self.game_table.setRowCount(len(self.records) + len(missing))
+        for row, record in enumerate(self.records):
+            install = record.installation
+            fill_row(
+                self.game_table,
+                row,
+                (
+                    self.games.get(install.game_id).game.name,
+                    install.edition,
+                    "확인 필요" if record.validation.issues else "경로 확인됨",
+                ),
+            )
+        for row, adapter in enumerate(missing, start=len(self.records)):
+            status = (
+                "미탐지" if self.context.platform in adapter.game.platforms else "현재 OS 미지원"
+            )
+            fill_row(
+                self.game_table,
+                row,
+                (adapter.game.name, ", ".join(sorted(adapter.game.editions)), status),
+            )
+        self.discovery_status.setText(
+            f"{len(self.records)}개 설치 경로 탐지"
+            + (" · " + " / ".join(issue.message for issue in value.issues) if value.issues else "")
+        )
+        self.rescan.setEnabled(True)
+        self.add_path.setEnabled(True)
+        self.discovery_done = True
+        self._select_game(index)
+
+    def _table_game(self) -> None:
+        row = self.game_table.currentRow()
+        if row < len(self.records) and row >= 0:
+            self.game_selector.setCurrentIndex(row)
+        elif row >= len(self.records):
+            self.game_details.setPlainText(
+                "설치가 탐지되지 않았습니다. 지원 OS에서 게임 폴더를 등록하세요."
+            )
+
+    def _select_game(self, index: int) -> None:
+        record = self.selected_game
+        if record is None:
+            self.game_details.setPlainText(
+                "탐지된 설치 경로가 없습니다. 게임과 OS 지원 범위를 확인하고 폴더를 등록하세요."
+            )
+            return
+        install = record.installation
+        self.store.put(
+            "desktop", "last_game", {"path": str(install.path), "game_id": install.game_id}
+        )
+        details = [
+            self.games.get(install.game_id).game.name,
+            str(install.path),
+            f"판본: {install.edition}",
+            f"플랫폼: {install.platform.value}",
+            f"게임 버전: {install.version.value or '미확인'}",
+            f"Build ID: {install.version.build_id or '미확인'}",
+            f"로더: {install.loader.name if install.loader else '미확인'}",
+            f"탐지: {record.origin}",
+        ]
+        details.extend(issue.message for issue in record.validation.issues)
+        details.append("게임 실행과 실제 모드 로딩은 별도 확인이 필요합니다.")
+        self.game_details.setPlainText("\n\n".join(details))
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self.workers:
+            for worker in self.workers:
+                worker.cancel()
+            event.ignore()
+            self.statusBar().showMessage("진행 중인 작업을 안전하게 종료하고 있습니다…")
+            QTimer.singleShot(100, self.close)
+        else:
+            event.accept()
 
 
 def main() -> int:
@@ -42,7 +354,7 @@ def main() -> int:
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("--config", type=Path, help="Client TOML configuration")
     parser.add_argument(
-        "--check", action="store_true", help="Create and exercise the Qt window, then exit"
+        "--check", action="store_true", help="Exercise game discovery and the Qt event loop"
     )
     args = parser.parse_args()
     try:
@@ -57,22 +369,48 @@ def main() -> int:
     app = QApplication([sys.argv[0]])
     app.setApplicationName("ModMesh")
     app.setApplicationVersion(__version__)
+    checked = False
     with (
-        (
-            TemporaryDirectory(prefix="modmesh-check-")
-            if args.check
-            else nullcontext(settings.paths.data_dir)
-        ) as data,
-        MetadataStore(Path(data) / "metadata.sqlite3") as store,
-    ):
-        window = MainWindow()
-        window.show()
-        if args.check:
-            QTimer.singleShot(50, app.quit)
-        result = app.exec()
-        logger.info("Desktop stopped", extra={"context": {"schema_version": store.schema_version}})
+        TemporaryDirectory(prefix="modmesh-check-")
+        if args.check
+        else nullcontext(settings.paths.data_dir)
+    ) as data:
+        settings = replace(settings, paths=replace(settings.paths, data_dir=Path(data)))
+        with MetadataStore(settings.paths.database) as store:
+            window = MainWindow(settings, store)
+            window.show()
+            if args.check:
+                started = time.monotonic()
+                timer = QTimer()
+
+                def finish_check() -> None:
+                    nonlocal checked
+                    if window.discovery_done and not window.workers:
+                        checked = window.game_table.rowCount() >= len(window.games.all())
+                        timer.stop()
+                        window.close()
+                    elif time.monotonic() - started > 15:
+                        timer.stop()
+                        window.close()
+
+                timer.timeout.connect(finish_check)
+                timer.start(20)
+            result = app.exec()
+            logger.info(
+                "Desktop stopped", extra={"context": {"schema_version": store.schema_version}}
+            )
     if args.check:
-        print(json.dumps({"application": "desktop", "version": __version__, "qt": qVersion()}))
+        print(
+            json.dumps(
+                {
+                    "application": "desktop",
+                    "version": __version__,
+                    "qt": qVersion(),
+                    "discovery": checked,
+                }
+            )
+        )
+        return 0 if checked else 1
     return result
 
 
