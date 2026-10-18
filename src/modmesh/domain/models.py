@@ -2,42 +2,15 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from enum import StrEnum
-from pathlib import Path, PurePosixPath, PureWindowsPath
-from urllib.parse import urlsplit
+from pathlib import Path
 from uuid import uuid4
 
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.domain.artifacts import FileHash, HashAlgorithm
-
-
-def require_text(value: str, field_name: str) -> None:
-    if not isinstance(value, str) or not value.strip() or "\x00" in value:
-        raise ModMeshError(ErrorCode.VALIDATION, f"{field_name} must be nonempty text")
-
-
-def require_id(value: str, field_name: str) -> None:
-    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", value):
-        raise ModMeshError(ErrorCode.VALIDATION, f"Invalid {field_name}")
-
-
-def relative_path(value: str) -> str:
-    require_text(value, "relative path")
-    normalized = value.replace("\\", "/")
-    path = PurePosixPath(normalized)
-    if path.is_absolute() or PureWindowsPath(value).drive or ".." in path.parts or str(path) == ".":
-        raise ModMeshError(ErrorCode.VALIDATION, "File path must remain within the installation")
-    return str(path)
-
-
-def _web_url(value: str | None) -> None:
-    if value is None:
-        return
-    url = urlsplit(value)
-    if url.scheme not in {"http", "https"} or not url.hostname or url.username or url.password:
-        raise ModMeshError(ErrorCode.VALIDATION, "Invalid web URL")
+from modmesh.domain.dependencies import Dependency
+from modmesh.domain.validation import relative_path, require_id, require_text, validate_web_url
 
 
 class Platform(StrEnum):
@@ -131,7 +104,7 @@ class SourceProject:
     def __post_init__(self) -> None:
         require_id(self.game_id, "game ID")
         require_text(self.name, "project name")
-        _web_url(self.web_url)
+        validate_web_url(self.web_url)
 
 
 @dataclass(frozen=True)
@@ -169,7 +142,7 @@ class ModFile:
             raise ModMeshError(ErrorCode.VALIDATION, "Mod filename must be a basename")
         if self.size is not None and (isinstance(self.size, bool) or self.size < 0):
             raise ModMeshError(ErrorCode.VALIDATION, "File size cannot be negative")
-        _web_url(self.download_url)
+        validate_web_url(self.download_url)
         if len({value.algorithm for value in self.hashes}) != len(self.hashes):
             raise ModMeshError(ErrorCode.VALIDATION, "Duplicate file hash algorithm")
 
@@ -183,6 +156,7 @@ class ModVersion:
     loaders: frozenset[str] = frozenset()
     files: tuple[ModFile, ...] = ()
     channel: ReleaseChannel = ReleaseChannel.RELEASE
+    dependencies: tuple[Dependency, ...] = ()
 
     def __post_init__(self) -> None:
         require_text(self.version_id, "source version ID")

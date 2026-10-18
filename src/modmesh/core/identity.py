@@ -6,7 +6,8 @@ from enum import StrEnum
 from uuid import NAMESPACE_URL, uuid5
 
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
-from modmesh.domain.models import SourceRef, require_id, require_text
+from modmesh.domain.models import SourceRef
+from modmesh.domain.validation import require_id, require_text
 from modmesh.storage.metadata import MetadataStore
 
 
