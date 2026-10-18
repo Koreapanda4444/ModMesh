@@ -178,9 +178,11 @@ class MetadataStore:
             return int(connection.execute(select(_migrations.c.version)).scalar_one())
 
     @contextmanager
-    def transaction(self) -> Iterator[MetadataTransaction]:
+    def transaction(self, *, write: bool = False) -> Iterator[MetadataTransaction]:
         try:
             with self._engine.begin() as connection:
+                if write:
+                    connection.exec_driver_sql("BEGIN IMMEDIATE")
                 yield MetadataTransaction(connection)
         except SQLAlchemyError as exc:
             raise ModMeshError(ErrorCode.STORAGE, "Local metadata transaction failed") from exc
@@ -190,7 +192,7 @@ class MetadataStore:
             return transaction.get(namespace, key)
 
     def put(self, namespace: str, key: str, payload: Mapping[str, object]) -> None:
-        with self.transaction() as transaction:
+        with self.transaction(write=True) as transaction:
             transaction.put(namespace, key, payload)
 
     def list(self, namespace: str) -> list[tuple[str, dict[str, object]]]:
