@@ -12,7 +12,7 @@ dependencies = ["httpx==0.28.1", "SQLAlchemy==2.1.5"]
 
 [project.optional-dependencies]
 desktop = ["PySide6-Essentials==6.12.0"]
-server = ["fastapi==0.118.0", "uvicorn==0.54.0"]
+server = ["fastapi==0.143.5", "uvicorn==0.54.0"]
 dev = ["ruff==0.17.1", "mypy==2.4.0", "setuptools==80.9.0", "wheel==0.45.1"]
 
 [project.scripts]
