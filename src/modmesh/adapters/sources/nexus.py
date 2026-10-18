@@ -20,6 +20,7 @@ from modmesh.core.sources import (
     SourceCapability,
     SourceDescriptor,
     SourceStatus,
+    VersionQuery,
 )
 from modmesh.domain.artifacts import FileHash, HashAlgorithm
 from modmesh.domain.models import ModFile, ModVersion, SourceProject, SourceRef
@@ -168,8 +169,14 @@ class NexusSource(SourceAdapter):
             _page_url(game_id, mod_id),
         )
 
-    async def versions(self, game_id: str, project_id: str) -> tuple[ModVersion, ...]:
+    async def versions(
+        self, game_id: str, project_id: str, *, query: VersionQuery | None = None
+    ) -> tuple[ModVersion, ...]:
         self.require(game_id, SourceCapability.VERSIONS)
+        if query is not None and (query.game_version or query.loader):
+            raise ModMeshError(
+                ErrorCode.UNSUPPORTED, "Nexus metadata cannot verify version/loader filters"
+            )
         mod_id = _mod_id(game_id, project_id)
         reference = _reference(game_id, mod_id)
         payload = object_data(

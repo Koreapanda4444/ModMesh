@@ -35,6 +35,17 @@ class SearchScope(StrEnum):
 
 
 @dataclass(frozen=True)
+class VersionQuery:
+    game_version: str | None = None
+    loader: str | None = None
+
+    def __post_init__(self) -> None:
+        for key in ("game_version", "loader"):
+            if (value := getattr(self, key)) is not None:
+                require_text(value, key)
+
+
+@dataclass(frozen=True)
 class SourceDescriptor:
     source_id: str
     name: str
@@ -134,7 +145,9 @@ class SourceAdapter(ABC):
             ErrorCode.UNSUPPORTED, "Project lookup is not implemented for this source"
         )
 
-    async def versions(self, game_id: str, project_id: str) -> tuple[ModVersion, ...]:
+    async def versions(
+        self, game_id: str, project_id: str, *, query: VersionQuery | None = None
+    ) -> tuple[ModVersion, ...]:
         raise ModMeshError(
             ErrorCode.UNSUPPORTED, "Version lookup is not implemented for this source"
         )
@@ -151,6 +164,10 @@ class SourceAdapter(ABC):
         self.require(game_id, SourceCapability.DEPENDENCIES)
         for version in await self.versions(game_id, project_id):
             if version.version_id == version_id:
+                if not version.dependencies_known:
+                    raise ModMeshError(
+                        ErrorCode.UNSUPPORTED, "Dependency metadata is unavailable for this version"
+                    )
                 return version.dependencies
         raise ModMeshError(ErrorCode.NOT_FOUND, "Source version was not found")
 

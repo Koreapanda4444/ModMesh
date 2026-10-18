@@ -73,10 +73,7 @@ class Dependency:
     game_versions: frozenset[str] = frozenset()
     loaders: frozenset[str] = frozenset()
 
-    def __post_init__(self) -> None:
-        if self.kind != DependencyKind.EMBEDDED and not any(
-            (self.target.project_id, self.target.version_id, self.target.canonical_id)
-        ):
-            raise ModMeshError(
-                ErrorCode.VALIDATION, "Non-embedded dependency requires a resolvable ID"
-            )
+    @property
+    def resolvable(self) -> bool:
+        """A valid upstream declaration may still lack IDs needed by a resolver."""
+        return bool(self.target.project_id or self.target.version_id or self.target.canonical_id)

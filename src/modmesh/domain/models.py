@@ -100,11 +100,15 @@ class SourceProject:
     summary: str = ""
     authors: tuple[str, ...] = ()
     web_url: str | None = None
+    description: str = ""
+    links: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         require_id(self.game_id, "game ID")
         require_text(self.name, "project name")
         validate_web_url(self.web_url)
+        for link in self.links:
+            validate_web_url(link)
 
 
 @dataclass(frozen=True)
@@ -130,6 +134,7 @@ class ModFile:
     size: int | None = None
     download_url: str | None = field(default=None, repr=False)
     hashes: tuple[FileHash, ...] = ()
+    primary: bool = False
 
     def __post_init__(self) -> None:
         require_text(self.file_id, "source file ID")
