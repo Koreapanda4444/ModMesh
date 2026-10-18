@@ -3,11 +3,13 @@
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from PySide6.QtCore import QTimer, qVersion
 from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QVBoxLayout, QWidget
 
 from modmesh import __version__
+from modmesh.core.config import ConfigurationError, load_client_settings
 
 
 class MainWindow(QMainWindow):
@@ -36,10 +38,15 @@ class MainWindow(QMainWindow):
 def main() -> int:
     parser = argparse.ArgumentParser(description="ModMesh desktop")
     parser.add_argument("--version", action="version", version=__version__)
+    parser.add_argument("--config", type=Path, help="Client TOML configuration")
     parser.add_argument(
         "--check", action="store_true", help="Create and exercise the Qt window, then exit"
     )
     args = parser.parse_args()
+    try:
+        load_client_settings(args.config)
+    except ConfigurationError as exc:
+        parser.error(str(exc))
     app = QApplication([sys.argv[0]])
     app.setApplicationName("ModMesh")
     app.setApplicationVersion(__version__)

@@ -3,12 +3,14 @@
 import argparse
 import asyncio
 import json
+from pathlib import Path
 
 import httpx
 import uvicorn
 from fastapi import FastAPI
 
 from modmesh import __version__
+from modmesh.core.config import ConfigurationError, load_server_settings
 
 
 def create_app() -> FastAPI:
@@ -35,12 +37,17 @@ async def check() -> dict[str, str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="ModMesh server")
     parser.add_argument("--version", action="version", version=__version__)
+    parser.add_argument("--config", type=Path, help="Server TOML configuration")
     parser.add_argument("--check", action="store_true", help="Exercise the ASGI health endpoint")
     args = parser.parse_args()
+    try:
+        settings = load_server_settings(args.config)
+    except ConfigurationError as exc:
+        parser.error(str(exc))
     if args.check:
         print(json.dumps(asyncio.run(check())))
     else:
-        uvicorn.run(create_app(), host="127.0.0.1", port=8731)
+        uvicorn.run(create_app(), host=settings.host, port=settings.port)
     return 0
 
 
