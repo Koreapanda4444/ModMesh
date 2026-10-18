@@ -15,12 +15,10 @@ from tempfile import TemporaryDirectory
 from PySide6.QtCore import QTimer, qVersion
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
-    QAbstractItemView,
     QApplication,
     QComboBox,
     QFileDialog,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -28,14 +26,14 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSplitter,
     QStackedWidget,
-    QTableWidget,
-    QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from modmesh import __version__
+from modmesh.apps.desktop.search import SearchPanel
+from modmesh.apps.desktop.widgets import fill_row, table
 from modmesh.apps.desktop.workers import Worker
 from modmesh.apps.runtime import create_game_registry
 from modmesh.core.config import ClientSettings, ConfigurationError, load_client_settings
@@ -48,27 +46,6 @@ from modmesh.core.discovery import (
 )
 from modmesh.core.games import DiscoveryContext, GameRegistry
 from modmesh.storage.metadata import MetadataStore
-
-
-def table(headers: tuple[str, ...]) -> QTableWidget:
-    widget = QTableWidget(0, len(headers))
-    widget.setHorizontalHeaderLabels(headers)
-    widget.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-    widget.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-    widget.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-    widget.setAlternatingRowColors(True)
-    widget.setShowGrid(False)
-    widget.verticalHeader().hide()
-    widget.verticalHeader().setDefaultSectionSize(42)
-    widget.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-    return widget
-
-
-def fill_row(widget: QTableWidget, row: int, values: tuple[str, ...]) -> None:
-    for column, value in enumerate(values):
-        item = QTableWidgetItem(value)
-        item.setToolTip(value)
-        widget.setItem(row, column, item)
 
 
 class MainWindow(QMainWindow):
@@ -173,6 +150,9 @@ class MainWindow(QMainWindow):
         self.discovery_status.setWordWrap(True)
         library.addWidget(self.discovery_status)
         self.pages.addWidget(self.library)
+        self.search_panel = SearchPanel(settings, store, self.start_work)
+        self.pages.addWidget(self.search_panel)
+        self.navigation.addItem("모드 탐색")
         outer.addLayout(body, 1)
         self.setCentralWidget(content)
         self.navigation.setCurrentRow(0)
@@ -315,6 +295,7 @@ class MainWindow(QMainWindow):
 
     def _select_game(self, index: int) -> None:
         record = self.selected_game
+        self.search_panel.set_context(record.installation if record else None)
         if record is None:
             self.game_details.setPlainText(
                 "탐지된 설치 경로가 없습니다. 게임과 OS 지원 범위를 확인하고 폴더를 등록하세요."
