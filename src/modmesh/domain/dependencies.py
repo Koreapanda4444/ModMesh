@@ -12,6 +12,8 @@ class DependencyKind(StrEnum):
     OPTIONAL = "optional"
     INCOMPATIBLE = "incompatible"
     EMBEDDED = "embedded"
+    TOOL = "tool"
+    INCLUDE = "include"
 
 
 @dataclass(frozen=True)

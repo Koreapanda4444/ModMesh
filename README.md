@@ -4,7 +4,7 @@
 
 ## 개발 상태
 
-01~17번: Python 패키지, PySide6 데스크톱 기본 창, FastAPI 서버 health 엔드포인트와 빌드·품질 검증 기반을 구현했습니다. 게임 지원과 모드 관리는 후속 단계입니다.
+01~18번: Python 패키지, PySide6 데스크톱 기본 창, FastAPI 서버 health 엔드포인트와 빌드·품질 검증 기반을 구현했습니다. 게임 지원과 모드 관리는 후속 단계입니다.
 
 ## 개발 환경
 
@@ -62,3 +62,5 @@ Linux 개발 환경에서는 `.venv/bin/python`, `.venv/bin/modmesh`를 사용�
 Nexus는 공개 trending feed와 공식 다운로드 페이지 인계를 제공합니다. API 기반 상세·파일 조회는 `MODMESH_NEXUS_API_KEY`가 필요합니다. 전체 카탈로그 검색과 동일하지 않으며 계정 권한에 따른 다운로드 제한을 우회하지 않습니다. [검증 범위와 제약](docs/verification.md)을 참고하세요.
 
 Modrinth는 Minecraft Java 모드 검색, 버전·로더 필터, 상세·파일·의존성·체크섬 조회와 허용된 CDN URL 확인을 지원합니다. 실제 API로 검증했으며 파일 저장은 다운로드 단계에서 연결합니다.
+
+CurseForge는 승인된 `MODMESH_CURSEFORGE_API_KEY`로 Minecraft Java 모드 API를 사용합니다. 명시적인 제3자 배포 허용과 API의 다운로드 URL이 확인되어야 직접 다운로드하며, 나머지는 공식 사이트로 인계합니다. 현재 인증 API 실환경 검증은 키 제공 전까지 미완료입니다.
