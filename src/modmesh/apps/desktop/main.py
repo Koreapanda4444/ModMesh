@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from modmesh import __version__
 from modmesh.apps.desktop.details import ModDetails
+from modmesh.apps.desktop.installed import InstalledPanel
 from modmesh.apps.desktop.search import SearchPanel
 from modmesh.apps.desktop.widgets import fill_row, table
 from modmesh.apps.desktop.workers import Worker
@@ -157,12 +158,17 @@ class MainWindow(QMainWindow):
             self.games,
             self.start_work,
             self.search_panel.details,
-            lambda: self.statusBar().showMessage("설치 기록이 갱신되었습니다."),
+            self._installation_changed,
         )
         self.search_panel.split.addWidget(self.mod_details)
         self.search_panel.selected.connect(self.mod_details.select)
         self.pages.addWidget(self.search_panel)
         self.navigation.addItem("모드 탐색")
+        self.installed_panel = InstalledPanel(
+            settings, self.games, self.start_work, self._open_installed_project
+        )
+        self.pages.addWidget(self.installed_panel)
+        self.navigation.addItem("설치된 모드")
         outer.addLayout(body, 1)
         self.setCentralWidget(content)
         self.navigation.setCurrentRow(0)
@@ -307,6 +313,7 @@ class MainWindow(QMainWindow):
         record = self.selected_game
         self.search_panel.set_context(record.installation if record else None)
         self.mod_details.set_context(record.installation if record else None)
+        self.installed_panel.set_context(record.installation if record else None)
         if record is None:
             self.game_details.setPlainText(
                 "탐지된 설치 경로가 없습니다. 게임과 OS 지원 범위를 확인하고 폴더를 등록하세요."
@@ -329,6 +336,14 @@ class MainWindow(QMainWindow):
         details.extend(issue.message for issue in record.validation.issues)
         details.append("게임 실행과 실제 모드 로딩은 별도 확인이 필요합니다.")
         self.game_details.setPlainText("\n\n".join(details))
+
+    def _installation_changed(self) -> None:
+        self.statusBar().showMessage("설치 기록이 갱신되었습니다.")
+        self.installed_panel.refresh()
+
+    def _open_installed_project(self, group: object) -> None:
+        self.navigation.setCurrentRow(1)
+        self.mod_details.select(group)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self.workers:
