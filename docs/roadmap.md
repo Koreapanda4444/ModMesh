@@ -24,7 +24,7 @@
 | 18 | 구현 · 승인 API 키 미검증 | `feat: add CurseForge integration` | 허용되는 API 키/검색·조회·다운로드 인계. |
 | 19 | 완료 | `feat: implement unified mod search` | 출처 통합 검색/필터/오류 격리. |
 | 20 | 완료 | `feat: add cross-source mod matching` | 동일 모드 후보 매핑. |
-| 21 | 예정 | `feat: add identical artifact merging` | 확인된 동일 해시 파일 병합. |
+| 21 | 완료 | `feat: add identical artifact merging` | 확인된 동일 해시 파일 병합. |
 | 22 | 예정 | `feat: add per-game source priorities` | 게임별 출처 우선순위와 fallback. |
 | 23 | 예정 | `feat: add mod download manager` | 취소·재시도·진행률·다운로드 큐. |
 | 24 | 예정 | `feat: add hash verified mod cache` | 검증 캐시 재사용 및 정리. |
