@@ -137,6 +137,9 @@ class SourceAdapter(ABC):
                 details={"source_id": self.descriptor.source_id, "capability": capability.value},
             )
 
+    def catalog_url(self, game_id: str) -> str | None:
+        return None
+
     async def search(self, request: SearchRequest) -> SearchPage:
         raise ModMeshError(ErrorCode.UNSUPPORTED, "Search is not implemented for this source")
 
@@ -177,6 +180,26 @@ class SourceAdapter(ABC):
     async def aclose(self) -> None:
         """Release resources owned by this adapter."""
         return None
+
+
+class UnavailableSource(SourceAdapter):
+    def __init__(
+        self, descriptor: SourceDescriptor, reason: str, website: str | None = None
+    ) -> None:
+        self._descriptor = descriptor
+        self._reason = reason
+        self._website = website
+
+    @property
+    def descriptor(self) -> SourceDescriptor:
+        return self._descriptor
+
+    def status(self, game_id: str) -> SourceStatus:
+        base = super().status(game_id)
+        return SourceStatus(False, frozenset(), self._reason) if base.available else base
+
+    def catalog_url(self, game_id: str) -> str | None:
+        return self._website if game_id in self.descriptor.games else None
 
 
 class SourceRegistry:

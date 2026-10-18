@@ -15,3 +15,5 @@ UE4SS 배치/활성 설정 근거: [공식 설치 문서](https://docs.ue4ss.com
 - 17 Modrinth: 실제 API에서 Sodium 검색·상세·Minecraft 1.21.1/Fabric 버전 22개·SHA-512/SHA-1 파일 식별·다운로드 URL 재조회와 Iris 의존성 선언을 검증했습니다. 게임 버전/로더는 API 필터와 응답 모델에 보존합니다. 모드팩 등 다른 프로젝트 유형과 다른 프로젝트의 파일은 거부합니다. 파일명만 있는 의존성은 해결된 것으로 간주하지 않고 미해결 선언으로 보존합니다. 실제 파일 저장/캐시는 23~24 단계에서 검증합니다.
 
 - 18 CurseForge: [공식 API 명세](https://docs.curseforge.com/rest-api/)에 따라 Minecraft Java(game 432, mod class 6)만 활성화했습니다. 주입 transport로 검색 필터·페이지·버전/로더·해시·의존성·배포 권한 거부·다운로드 URL 부재·키 없는 호출 차단을 검증했습니다. Tool/Include 관계는 임의로 required/embedded로 바꾸지 않고 원래 관계를 보존합니다. CDN URL을 추측하거나 배포 제한을 우회하지 않습니다. **승인된 API 키가 없어 실제 인증 API·파일 다운로드는 미검증**입니다. Palworld/ARK 등 검증되지 않은 CurseForge 게임 매핑은 활성화하지 않았습니다.
+
+- 19 통합 검색: 실제 CLI에서 Sodium 검색 결과를 받으면서 CurseForge 키 부재와 Nexus의 미지원 버전/로더 필터를 각 출처의 `unavailable` 상태로 분리했습니다. 취소 시 하위 요청 정리, 타임아웃·status 오류·잘못된 자격 증명의 출처별 격리와 독립적인 페이지 커서를 검증했습니다. 이름이 같다는 이유로 출처 결과를 자동 병합하지 않습니다.

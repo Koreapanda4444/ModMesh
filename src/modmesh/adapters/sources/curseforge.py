@@ -299,3 +299,6 @@ class CurseForgeSource(SourceAdapter):
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
+
+    def catalog_url(self, game_id: str) -> str | None:
+        return _HOME if game_id == "minecraft" else None

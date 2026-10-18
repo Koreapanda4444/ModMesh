@@ -22,7 +22,7 @@
 | 16 | 구현 · 인증 API 미검증 | `feat: add Nexus Mods integration` | 정책 준수 검색·정보·허용 다운로드/인계. |
 | 17 | 완료 | `feat: add Modrinth integration` | 검색·버전·로더·의존성·파일. |
 | 18 | 구현 · 승인 API 키 미검증 | `feat: add CurseForge integration` | 허용되는 API 키/검색·조회·다운로드 인계. |
-| 19 | 예정 | `feat: implement unified mod search` | 출처 통합 검색/필터/오류 격리. |
+| 19 | 완료 | `feat: implement unified mod search` | 출처 통합 검색/필터/오류 격리. |
 | 20 | 예정 | `feat: add cross-source mod matching` | 동일 모드 후보 매핑. |
 | 21 | 예정 | `feat: add identical artifact merging` | 확인된 동일 해시 파일 병합. |
 | 22 | 예정 | `feat: add per-game source priorities` | 게임별 출처 우선순위와 fallback. |

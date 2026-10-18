@@ -277,3 +277,6 @@ class ModrinthSource(SourceAdapter):
         if len(self._verified_projects) >= 512:
             self._verified_projects.clear()
         self._verified_projects.add(project_id)
+
+    def catalog_url(self, game_id: str) -> str | None:
+        return "https://modrinth.com/mods" if game_id == "minecraft" else None

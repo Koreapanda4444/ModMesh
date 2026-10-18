@@ -108,11 +108,9 @@ class NexusSource(SourceAdapter):
         website = f"https://www.nexusmods.com/{domain}/mods/"
         warnings = ("Nexus REST exposes a limited trending feed, not full catalog text search.",)
         if request.game_version or request.loader:
-            return SearchPage(
-                (),
-                warnings=warnings + ("This feed cannot verify game-version/loader filters.",),
-                handoff_url=website,
-                scope=SearchScope.TRENDING,
+            raise ModMeshError(
+                ErrorCode.UNSUPPORTED,
+                "Nexus feed cannot verify version/loader filters; use the website",
             )
         payload = object_data(await self._public.get_json(f"games/{domain}/trending-mods"))
         feed = object_data(payload.get("data"))
@@ -150,6 +148,9 @@ class NexusSource(SourceAdapter):
             handoff_url=website,
             scope=SearchScope.TRENDING,
         )
+
+    def catalog_url(self, game_id: str) -> str | None:
+        return f"https://www.nexusmods.com/{_GAMES[game_id]}/mods/" if game_id in _GAMES else None
 
     async def project(self, game_id: str, project_id: str) -> SourceProject:
         self.require(game_id, SourceCapability.PROJECT)
