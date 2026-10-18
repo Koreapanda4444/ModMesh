@@ -16,7 +16,7 @@
 | 10 | 완료 | `feat: add game adapter architecture` | 독립 Game Adapter 계약 및 Registry. |
 | 11 | 완료 | `feat: add source adapter architecture` | Source Adapter/지원 capability/Registry. |
 | 12 | 완료 | `feat: implement game discovery engine` | 게임 경로 탐지 및 수동 지정. |
-| 13 | 예정 | `feat: add Palworld game support` | Steam 설치·버전·모드 환경 탐지. |
+| 13 | 구현 · 실게임 미검증 | `feat: add Palworld game support` | Steam 설치·버전·모드 환경 탐지. |
 | 14 | 예정 | `feat: add Palworld mod discovery` | 실제 모드 위치/형태/기존 파일 안전 탐지. |
 | 15 | 예정 | `feat: add shared source network layer` | HTTP/재시도/타임아웃/제한/자격 증명 경계. |
 | 16 | 예정 | `feat: add Nexus Mods integration` | 정책 준수 검색·정보·허용 다운로드/인계. |

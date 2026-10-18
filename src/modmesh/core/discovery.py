@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from itertools import chain
@@ -11,7 +11,13 @@ from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
 from modmesh.core.diagnostics import ErrorCode, ModMeshError, redact_text
-from modmesh.core.games import DiscoveryContext, EnvironmentIssue, EnvironmentReport, GameRegistry
+from modmesh.core.games import (
+    DiscoveryContext,
+    EnvironmentIssue,
+    EnvironmentReport,
+    GameAdapter,
+    GameRegistry,
+)
 from modmesh.domain.models import GameInstallation, Platform
 from modmesh.storage.metadata import MetadataStore
 
@@ -120,7 +126,11 @@ class DiscoveryEngine:
             try:
                 manual = self.manual_paths(key)
                 manual_keys = {_path_key(path, context.platform) for path in manual}
-                for count, candidate in enumerate(chain(manual, adapter.candidates(context))):
+
+                def automatic_candidates(current: GameAdapter = adapter) -> Iterator[Path]:
+                    yield from current.candidates(context)
+
+                for count, candidate in enumerate(chain(manual, automatic_candidates())):
                     if cancelled is not None and cancelled():
                         raise ModMeshError(ErrorCode.CANCELLED, "Game discovery cancelled")
                     if count >= candidate_limit:
