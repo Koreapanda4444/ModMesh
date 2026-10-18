@@ -105,6 +105,7 @@ class SearchPanel(QWidget):
         self.context_label.setWordWrap(True)
         layout.addWidget(self.context_label)
         split = QSplitter()
+        self.split = split
         self.results = table(("모드", "출처", "제작자"))
         self.results.itemSelectionChanged.connect(self._selected)
         split.addWidget(self.results)

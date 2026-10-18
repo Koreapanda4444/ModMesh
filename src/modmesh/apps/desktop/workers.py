@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 from collections.abc import Awaitable, Callable
 
@@ -22,7 +23,7 @@ class Worker(QThread):
         try:
             self.succeeded.emit(self.work(self.cancelled))
         except ModMeshError as exc:
-            self.failed.emit(redact_text(f"{exc.code.value}: {exc.message}"))
+            self.failed.emit(json.dumps(exc.as_dict(), ensure_ascii=False, default=str))
         except Exception as exc:
             self.failed.emit(redact_text(f"{type(exc).__name__}: {exc}"))
 

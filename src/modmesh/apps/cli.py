@@ -7,8 +7,8 @@ import threading
 from dataclasses import asdict
 from functools import partial
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
+from modmesh.apps.operations import prepare_resolution
 from modmesh.apps.runtime import (
     DOWNLOAD_DOMAINS,
     create_game_registry,
@@ -30,9 +30,7 @@ from modmesh.core.downloads import (
 )
 from modmesh.core.games import DiscoveryContext
 from modmesh.core.identity import IdentityRegistry
-from modmesh.core.installation import InstallationManager
 from modmesh.core.matching import ProjectMatcher
-from modmesh.core.planning import InstallInput
 from modmesh.core.removal import RemovalManager
 from modmesh.core.resolver import DependencyResolution, DependencyResolver, ResolvedMod
 from modmesh.core.search import SearchState, UnifiedSearch
@@ -369,61 +367,26 @@ async def _plan(
             )
         )
         return 1
-    with (
-        TemporaryDirectory(prefix="modmesh-plan-") as name,
-        ArtifactCache(settings.paths.cache_dir, max_bytes=settings.cache_max_bytes) as cache,
-    ):
-        inputs = []
-        async with DownloadManager(
-            DOWNLOAD_DOMAINS,
-            policy=DownloadPolicy(max_bytes=min(8 * 1024**3, settings.cache_max_bytes)),
-        ) as manager:
-            for index, mod in enumerate(resolution.mods):
-
-                async def fetch(destination: Path, selected: ResolvedMod = mod) -> DownloadResult:
-                    return await manager.submit_candidate(
-                        ArtifactCandidate(
-                            selected.project,
-                            selected.version,
-                            selected.file,
-                            resolution.game_version,
-                            resolution.loader,
-                        ),
-                        (),
-                        registry,
-                        source_priorities(settings.source_priorities),
-                        destination,
-                    ).wait()
-
-                entry = await cache.obtain(mod.file, fetch)
-                path = await cache.export_async(entry, Path(name) / str(index))
-                inputs.append(
-                    InstallInput(
-                        mod,
-                        path,
-                        args.rule if mod.direct else None,
-                        args.archive_prefix if mod.direct else "",
-                    )
-                )
-        installer = InstallationManager(create_game_registry(), installation)
-        cancelled = threading.Event()
-        plan = await _blocking(
-            partial(
-                installer.plan,
-                resolution,
-                inputs,
-                replace_existing=args.replace_existing,
-                cancelled=cancelled.is_set,
-            ),
-            cancelled,
-        )
+    cancelled = threading.Event()
+    prepared = await prepare_resolution(
+        settings,
+        registry,
+        installation,
+        resolution,
+        rule=args.rule,
+        prefix=args.archive_prefix,
+        replace_existing=args.replace_existing,
+        cancelled=cancelled,
+    )
+    try:
+        plan = prepared.plan
         payload = asdict(plan)
         payload["applicable"] = plan.applicable
         payload["fingerprint"] = plan.fingerprint
         if args.apply:
             result = await _blocking(
                 partial(
-                    installer.apply,
+                    prepared.manager.apply,
                     plan,
                     args.apply,
                     replace_existing=args.replace_existing,
@@ -434,6 +397,8 @@ async def _plan(
             payload["operation"] = asdict(result)
         print(json.dumps(_without_urls(payload), ensure_ascii=False, default=str))
         return 0 if plan.applicable else 1
+    finally:
+        prepared.close()
 
 
 def _without_urls(value: object) -> object:

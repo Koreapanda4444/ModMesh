@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from modmesh import __version__
+from modmesh.apps.desktop.details import ModDetails
 from modmesh.apps.desktop.search import SearchPanel
 from modmesh.apps.desktop.widgets import fill_row, table
 from modmesh.apps.desktop.workers import Worker
@@ -151,6 +152,15 @@ class MainWindow(QMainWindow):
         library.addWidget(self.discovery_status)
         self.pages.addWidget(self.library)
         self.search_panel = SearchPanel(settings, store, self.start_work)
+        self.mod_details = ModDetails(
+            settings,
+            self.games,
+            self.start_work,
+            self.search_panel.details,
+            lambda: self.statusBar().showMessage("설치 기록이 갱신되었습니다."),
+        )
+        self.search_panel.split.addWidget(self.mod_details)
+        self.search_panel.selected.connect(self.mod_details.select)
         self.pages.addWidget(self.search_panel)
         self.navigation.addItem("모드 탐색")
         outer.addLayout(body, 1)
@@ -296,6 +306,7 @@ class MainWindow(QMainWindow):
     def _select_game(self, index: int) -> None:
         record = self.selected_game
         self.search_panel.set_context(record.installation if record else None)
+        self.mod_details.set_context(record.installation if record else None)
         if record is None:
             self.game_details.setPlainText(
                 "탐지된 설치 경로가 없습니다. 게임과 OS 지원 범위를 확인하고 폴더를 등록하세요."
@@ -327,6 +338,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("진행 중인 작업을 안전하게 종료하고 있습니다…")
             QTimer.singleShot(100, self.close)
         else:
+            self.mod_details.clear_plan()
             event.accept()
 
 
