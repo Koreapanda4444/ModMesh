@@ -151,16 +151,18 @@ class ModFile:
 class ModVersion:
     project: SourceRef
     version_id: str
-    number: str
+    number: str | None
     game_versions: frozenset[str] = frozenset()
     loaders: frozenset[str] = frozenset()
     files: tuple[ModFile, ...] = ()
     channel: ReleaseChannel = ReleaseChannel.RELEASE
     dependencies: tuple[Dependency, ...] = ()
+    dependencies_known: bool = False
 
     def __post_init__(self) -> None:
         require_text(self.version_id, "source version ID")
-        require_text(self.number, "mod version")
+        if self.number is not None:
+            require_text(self.number, "mod version")
         if any(file.project != self.project for file in self.files):
             raise ModMeshError(ErrorCode.VALIDATION, "Version file belongs to another project")
         if len({file.file_id for file in self.files}) != len(self.files):

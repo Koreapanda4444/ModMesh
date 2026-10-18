@@ -4,7 +4,7 @@
 
 ## 개발 상태
 
-01~14번: Python 패키지, PySide6 데스크톱 기본 창, FastAPI 서버 health 엔드포인트와 빌드·품질 검증 기반을 구현했습니다. 게임 지원과 모드 관리는 후속 단계입니다.
+01~16번: Python 패키지, PySide6 데스크톱 기본 창, FastAPI 서버 health 엔드포인트와 빌드·품질 검증 기반을 구현했습니다. 게임 지원과 모드 관리는 후속 단계입니다.
 
 ## 개발 환경
 
@@ -58,3 +58,5 @@ Linux 개발 환경에서는 `.venv/bin/python`, `.venv/bin/modmesh`를 사용�
 `modmesh-cli discover`로 등록된 게임 어댑터의 탐지를 실행합니다. `--game <ID> --path <경로>`는 어댑터 검증을 통과한 수동 경로만 저장합니다. 탐지 엔진은 취소·오류 격리·중복 제거·안정적인 설치 ID를 지원합니다. 현재 Palworld Windows Steam 어댑터를 등록했습니다. Steam 라이브러리·앱 매니페스트와 수동 경로에서 게임 파일 배치를 식별하며, Steam build ID와 게임의 의미상 버전은 구분합니다. 의미상 버전은 확인되지 않으면 미확인으로 남깁니다. **실제 Palworld 설치 환경을 사용할 수 없어 실게임 검증은 미완료입니다.**
 
 `modmesh-cli discover --mods`는 인식된 설치의 모드 파일을 변경 없이 조회합니다. Palworld의 알려진 모드 폴더와 UE4SS 배치를 구분하고 기존 파일은 외부 설치로 표시합니다. 활성 값은 UE4SS 설정을 읽은 결과이며 실제 게임 로딩 성공을 보증하지 않습니다.
+
+Nexus는 공개 trending feed와 공식 다운로드 페이지 인계를 제공합니다. API 기반 상세·파일 조회는 `MODMESH_NEXUS_API_KEY`가 필요합니다. 전체 카탈로그 검색과 동일하지 않으며 계정 권한에 따른 다운로드 제한을 우회하지 않습니다. [검증 범위와 제약](docs/verification.md)을 참고하세요.

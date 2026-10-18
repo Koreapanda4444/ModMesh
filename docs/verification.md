@@ -9,3 +9,5 @@
 UE4SS 배치/활성 설정 근거: [공식 설치 문서](https://docs.ue4ss.com/installation-guide.html), [공식 모드 설치 문서](https://docs.ue4ss.com/guides/installing-a-c%2B%2B-mod.html). DLL·파일 존재와 설정의 활성 값은 실행 중 로딩 성공을 의미하지 않습니다.
 
 - 15 공통 HTTP: 실제 Modrinth HTTPS JSON 응답(로더 29개)을 확인했습니다. 주입한 HTTP transport로 재시도·잘못된 JSON·크기 제한·타임아웃·출처/인증 헤더 격리·긴 Retry-After 조기 재시도 방지를 검증했습니다. 소스 API 키는 환경 변수에서만 읽고 로그 마스킹에 등록합니다.
+
+- 16 Nexus: 최신 [공식 v3 명세](https://api.nexusmods.com/openapi.yaml)의 공개 trending feed에서 실제 Palworld 프로젝트 3개를 조회했습니다. 전체 카탈로그 텍스트 검색과 버전/로더 필터로 가장하지 않고 제한된 feed임을 결과에 표시하며 공식 사이트로 인계합니다. 상세·파일은 공식 문서가 연결하는 v1 API를 사용합니다. API 키/계정 권한에 따른 메타데이터 파싱과 다운로드/인계 분기는 주입 transport로 검증했습니다. **인증 API와 실제 Nexus 파일 다운로드는 API 키가 없어 미검증**입니다. 버전·의존성·해시가 확인되지 않으면 미확인 상태를 유지합니다.

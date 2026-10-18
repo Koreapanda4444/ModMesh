@@ -29,6 +29,11 @@ class SearchSort(StrEnum):
     UPDATED = "updated"
 
 
+class SearchScope(StrEnum):
+    CATALOG = "catalog"
+    TRENDING = "trending"
+
+
 @dataclass(frozen=True)
 class SourceDescriptor:
     source_id: str
@@ -78,6 +83,7 @@ class SearchPage:
     next_offset: int | None = None
     warnings: tuple[str, ...] = ()
     handoff_url: str | None = None
+    scope: SearchScope = SearchScope.CATALOG
 
 
 class DownloadMode(StrEnum):
@@ -151,6 +157,10 @@ class SourceAdapter(ABC):
     async def resolve_download(self, game_id: str, file: ModFile) -> DownloadAccess:
         raise ModMeshError(ErrorCode.UNSUPPORTED, "Downloads are not implemented for this source")
 
+    async def aclose(self) -> None:
+        """Release resources owned by this adapter."""
+        return None
+
 
 class SourceRegistry:
     def __init__(self) -> None:
@@ -182,3 +192,7 @@ class SourceRegistry:
             for _, adapter in sorted(self._adapters.items())
             if game_id is None or game_id in adapter.descriptor.games
         )
+
+    async def aclose(self) -> None:
+        for adapter in self.all():
+            await adapter.aclose()
