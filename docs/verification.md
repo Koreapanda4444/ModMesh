@@ -7,3 +7,5 @@
 - 14 Palworld 모드 탐지: `~mods`, `LogicMods`의 Pak/IoStore 파일 묶음, 두 UE4SS Mods 배치, 설정상의 활성 여부, 로더 DLL 존재, 외부 파일·심볼릭 링크 보호를 임시 디렉터리에서 검증했습니다. 파일은 읽기 전용이며 전부 외부 설치로 분류합니다. 루트의 게임 기본 Pak이나 사용자 지정 중앙 UE4SS 작업 폴더는 자동으로 모드라고 분류하지 않습니다. **실게임에서의 실제 로딩·호환성은 미검증**입니다.
 
 UE4SS 배치/활성 설정 근거: [공식 설치 문서](https://docs.ue4ss.com/installation-guide.html), [공식 모드 설치 문서](https://docs.ue4ss.com/guides/installing-a-c%2B%2B-mod.html). DLL·파일 존재와 설정의 활성 값은 실행 중 로딩 성공을 의미하지 않습니다.
+
+- 15 공통 HTTP: 실제 Modrinth HTTPS JSON 응답(로더 29개)을 확인했습니다. 주입한 HTTP transport로 재시도·잘못된 JSON·크기 제한·타임아웃·출처/인증 헤더 격리·긴 Retry-After 조기 재시도 방지를 검증했습니다. 소스 API 키는 환경 변수에서만 읽고 로그 마스킹에 등록합니다.
