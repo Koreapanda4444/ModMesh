@@ -4,7 +4,7 @@
 
 ## 개발 상태
 
-01~04번: Python 패키지, PySide6 데스크톱 기본 창, FastAPI 서버 health 엔드포인트와 빌드·품질 검증 기반을 구현했습니다. 게임 지원과 모드 관리는 후속 단계입니다.
+01~05번: Python 패키지, PySide6 데스크톱 기본 창, FastAPI 서버 health 엔드포인트와 빌드·품질 검증 기반을 구현했습니다. 게임 지원과 모드 관리는 후속 단계입니다.
 
 ## 개발 환경
 
@@ -48,3 +48,5 @@ Linux 개발 환경에서는 `.venv/bin/python`, `.venv/bin/modmesh`를 사용�
 서버는 `--config`/`MODMESH_SERVER_CONFIG`의 `[server]` 섹션과 `MODMESH_BIND_HOST`, `MODMESH_BIND_PORT`, `MODMESH_ENV`, `MODMESH_DATABASE_URL`을 사용합니다. DB 자격 증명은 환경 변수로 전달하세요. 현재 health API는 DB 없이 실행하며, 실제 계정·팩 DB 연결은 서버 단계에서 구현합니다.
 
 로그는 JSON 형식이며 비밀번호·토큰·인증 헤더·URL 자격 증명과 쿼리 값을 마스킹합니다. 데스크톱 로그는 데이터 경로의 `logs/`에서 크기 제한과 회전을 적용합니다. 서버 오류 응답에는 구조화된 오류 코드와 마스킹된 상세만 포함합니다.
+
+로컬 메타데이터는 SQLAlchemy Core를 통해 SQLite에 저장합니다. 스키마 버전을 확인하고 트랜잭션·WAL·동시 접근 제한을 적용합니다. 알 수 없는 미래 스키마는 덮어쓰지 않습니다. `--check`는 임시 DB를 사용하며 사용자 DB를 변경하지 않습니다.

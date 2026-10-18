@@ -3,7 +3,9 @@
 import argparse
 import json
 import sys
+from contextlib import nullcontext
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from PySide6.QtCore import QTimer, qVersion
 from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QVBoxLayout, QWidget
@@ -11,6 +13,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QVBoxLayout, QW
 from modmesh import __version__
 from modmesh.core.config import ConfigurationError, load_client_settings
 from modmesh.core.diagnostics import configure_logging, install_exception_hook
+from modmesh.storage.metadata import MetadataStore
 
 
 class MainWindow(QMainWindow):
@@ -56,11 +59,20 @@ def main() -> int:
     app = QApplication([sys.argv[0]])
     app.setApplicationName("ModMesh")
     app.setApplicationVersion(__version__)
-    window = MainWindow()
-    window.show()
-    if args.check:
-        QTimer.singleShot(50, app.quit)
-    result = app.exec()
+    with (
+        (
+            TemporaryDirectory(prefix="modmesh-check-")
+            if args.check
+            else nullcontext(settings.paths.data_dir)
+        ) as data,
+        MetadataStore(Path(data) / "metadata.sqlite3") as store,
+    ):
+        window = MainWindow()
+        window.show()
+        if args.check:
+            QTimer.singleShot(50, app.quit)
+        result = app.exec()
+        logger.info("Desktop stopped", extra={"context": {"schema_version": store.schema_version}})
     if args.check:
         print(json.dumps({"application": "desktop", "version": __version__, "qt": qVersion()}))
     return result
