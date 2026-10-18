@@ -9,10 +9,12 @@ from dataclasses import asdict
 from pathlib import Path
 
 from modmesh.apps.runtime import create_game_registry, source_registry
-from modmesh.core.config import load_client_settings
+from modmesh.core.config import ClientSettings, load_client_settings
 from modmesh.core.diagnostics import ModMeshError, configure_logging
 from modmesh.core.discovery import DiscoveryEngine, current_platform
 from modmesh.core.games import DiscoveryContext
+from modmesh.core.identity import IdentityRegistry
+from modmesh.core.matching import ProjectMatcher
 from modmesh.core.search import SearchState, UnifiedSearch
 from modmesh.core.sources import SearchRequest, SearchSort
 from modmesh.storage.metadata import MetadataStore
@@ -51,7 +53,7 @@ def main() -> int:
         settings = load_client_settings(args.config)
         configure_logging(level=settings.log_level)
         if args.command == "search":
-            return asyncio.run(_search(args))
+            return asyncio.run(_search(args, settings))
         context = DiscoveryContext(current_platform(), tuple(args.root), os.environ)
         with MetadataStore(settings.paths.database) as store:
             registry = create_game_registry()
@@ -75,7 +77,7 @@ def main() -> int:
         return 1
 
 
-async def _search(args: argparse.Namespace) -> int:
+async def _search(args: argparse.Namespace, settings: ClientSettings) -> int:
     request = SearchRequest(
         args.game,
         args.query,
@@ -87,7 +89,12 @@ async def _search(args: argparse.Namespace) -> int:
     )
     async with source_registry() as registry:
         result = await UnifiedSearch(registry).search(request, source_ids=args.source)
-        print(json.dumps(asdict(result), ensure_ascii=False, default=str))
+        payload = asdict(result)
+        with MetadataStore(settings.paths.database) as store:
+            payload["matching"] = asdict(
+                ProjectMatcher(IdentityRegistry(store)).match(result.projects)
+            )
+        print(json.dumps(payload, ensure_ascii=False, default=str))
         return 0 if any(source.state == SearchState.SUCCESS for source in result.sources) else 1
 
 
