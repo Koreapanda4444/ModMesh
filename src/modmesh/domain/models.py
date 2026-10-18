@@ -130,7 +130,7 @@ class ModFile:
     file_id: str
     filename: str
     size: int | None = None
-    download_url: str | None = field(default=None, repr=False)
+    download_url: str | None = field(default=None, repr=False, compare=False)
     hashes: tuple[FileHash, ...] = ()
     primary: bool = False
 

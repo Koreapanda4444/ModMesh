@@ -3,7 +3,9 @@ import asyncio
 import json
 import os
 import sys
+import threading
 from dataclasses import asdict
+from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -19,11 +21,18 @@ from modmesh.core.config import ClientSettings, load_client_settings
 from modmesh.core.conflicts import analyze_dependencies
 from modmesh.core.diagnostics import ErrorCode, ModMeshError, configure_logging, redact
 from modmesh.core.discovery import DiscoveryEngine, current_platform
-from modmesh.core.downloads import DownloadManager, DownloadPolicy, DownloadProgress, DownloadResult
+from modmesh.core.downloads import (
+    DownloadManager,
+    DownloadPolicy,
+    DownloadProgress,
+    DownloadResult,
+    _blocking,
+)
 from modmesh.core.games import DiscoveryContext
 from modmesh.core.identity import IdentityRegistry
+from modmesh.core.installation import InstallationManager
 from modmesh.core.matching import ProjectMatcher
-from modmesh.core.planning import InstallationPlanner, InstallInput
+from modmesh.core.planning import InstallInput
 from modmesh.core.resolver import DependencyResolution, DependencyResolver, ResolvedMod
 from modmesh.core.search import SearchState, UnifiedSearch
 from modmesh.core.sources import SearchRequest, SearchSort, SourceRegistry, VersionQuery
@@ -66,6 +75,10 @@ def main() -> int:
     plan.add_argument("--path", required=True, type=Path)
     plan.add_argument("--rule", help="Explicit game installation rule ID")
     plan.add_argument("--archive-prefix", default="")
+    plan.add_argument("--replace-existing", action="store_true")
+    plan.add_argument(
+        "--apply", metavar="FINGERPRINT", help="Apply the exact previously reviewed plan"
+    )
     for command in (versions, download, resolve, plan):
         command.add_argument("--game", required=True)
         command.add_argument("--source", required=True)
@@ -84,12 +97,39 @@ def main() -> int:
     download.add_argument("--progress", action="store_true", help="Emit progress JSON to stderr")
     cache_command = commands.add_parser("cache", help="Inspect or safely clean owned cache objects")
     cache_command.add_argument("action", choices=("info", "verify", "prune", "clear"))
+    for name in ("installed", "recover"):
+        operation = commands.add_parser(name)
+        operation.add_argument("--game", required=True)
+        operation.add_argument("--path", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "discover" and args.path is not None and args.game is None:
         parser.error("--path requires --game")
     try:
         settings = load_client_settings(args.config)
         configure_logging(level=settings.log_level)
+        if args.command in {"installed", "recover"}:
+            games = create_game_registry()
+            installation = games.get(args.game).inspect(
+                args.path.expanduser().resolve(), current_platform()
+            )
+            if installation is None:
+                raise ModMeshError(
+                    ErrorCode.VALIDATION, "Path is not a supported game installation"
+                )
+            manager = InstallationManager(games, installation)
+            if args.command == "installed":
+                installed_mods = manager.installed()
+                print(
+                    json.dumps(
+                        [asdict(value) for value in installed_mods], ensure_ascii=False, default=str
+                    )
+                )
+                return 0
+            recovered = manager.recover()
+            print(
+                json.dumps([asdict(value) for value in recovered], ensure_ascii=False, default=str)
+            )
+            return 1 if any(value.state == "recovery_required" for value in recovered) else 0
         if args.command == "cache":
             with ArtifactCache(
                 settings.paths.cache_dir, max_bytes=settings.cache_max_bytes
@@ -339,11 +379,33 @@ async def _plan(
                         args.archive_prefix if mod.direct else "",
                     )
                 )
-        planner = InstallationPlanner(create_game_registry())
-        plan = await asyncio.to_thread(planner.build, installation, resolution, inputs)
+        installer = InstallationManager(create_game_registry(), installation)
+        cancelled = threading.Event()
+        plan = await _blocking(
+            partial(
+                installer.plan,
+                resolution,
+                inputs,
+                replace_existing=args.replace_existing,
+                cancelled=cancelled.is_set,
+            ),
+            cancelled,
+        )
         payload = asdict(plan)
         payload["applicable"] = plan.applicable
         payload["fingerprint"] = plan.fingerprint
+        if args.apply:
+            result = await _blocking(
+                partial(
+                    installer.apply,
+                    plan,
+                    args.apply,
+                    replace_existing=args.replace_existing,
+                    cancelled=cancelled.is_set,
+                ),
+                cancelled,
+            )
+            payload["operation"] = asdict(result)
         print(json.dumps(_without_urls(payload), ensure_ascii=False, default=str))
         return 0 if plan.applicable else 1
 

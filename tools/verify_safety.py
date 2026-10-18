@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import logging
+import os
 import stat
 import subprocess
 import sys
@@ -11,12 +12,14 @@ from tempfile import TemporaryDirectory
 
 import httpx
 
+import modmesh.core.installation as installation_engine
 from modmesh.adapters.games.palworld import PalworldAdapter
 from modmesh.core.cache import ArtifactCache
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.downloads import DownloadManager, DownloadPolicy, DownloadResult, DownloadState
 from modmesh.core.games import GameRegistry
 from modmesh.core.hashing import verify_file
+from modmesh.core.installation import InstallationManager
 from modmesh.core.planning import InstallationPlanner, InstallInput
 from modmesh.core.resolver import DependencyResolution, ResolvedMod
 from modmesh.core.sources import DownloadAccess, DownloadMode
@@ -356,6 +359,103 @@ def check_planning(root: Path) -> None:
     assert destination.read_bytes() == b"user content"
 
 
+def temporary_installation(root: Path):
+    binary = root / "Pal/Binaries/Win64"
+    binary.mkdir(parents=True, exist_ok=True)
+    (binary / "Palworld-Win64-Shipping.exe").write_bytes(b"MZ")
+    (root / "Palworld.exe").write_bytes(b"MZ")
+    adapter = PalworldAdapter()
+    registry = GameRegistry()
+    registry.register(adapter)
+    game = adapter.inspect(root, Platform.WINDOWS)
+    assert game is not None
+    source = root.parent / "install-package.zip"
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr("One.pak", b"new one")
+        archive.writestr("Two.pak", b"new two")
+    reference = SourceRef("example", "p")
+    file = ModFile(
+        reference,
+        "install-zip",
+        "mod.zip",
+        source.stat().st_size,
+        hashes=(FileHash(HashAlgorithm.SHA256, hashlib.sha256(source.read_bytes()).hexdigest()),),
+    )
+    project = SourceProject(reference, "palworld", "package")
+    version = ModVersion(reference, "1", "1", files=(file,), dependencies_known=True)
+    mod = ResolvedMod(project, version, file, True)
+    return (
+        InstallationManager(registry, game),
+        DependencyResolution("palworld", None, None, (mod,), ()),
+        (InstallInput(mod, source, "palworld-pak"),),
+    )
+
+
+def install_crash(root: Path, mode: str) -> None:
+    manager, resolution, inputs = temporary_installation(root)
+    plan = manager.plan(resolution, inputs, replace_existing=True)
+    publish = installation_engine.publish_file
+
+    def interrupt(temporary: Path, destination: Path) -> None:
+        if mode == "after":
+            publish(temporary, destination)
+        os._exit(77)
+
+    installation_engine.publish_file = interrupt
+    manager.apply(plan, plan.fingerprint, replace_existing=True)
+
+
+def check_installation(root: Path) -> None:
+    manager, resolution, inputs = temporary_installation(root / "normal")
+    target = manager.root / "Pal/Content/Paks/~mods/One.pak"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"user original")
+    plan = manager.plan(resolution, inputs, replace_existing=True)
+    publish = installation_engine.publish_file
+    calls = 0
+
+    def fail_once(temporary: Path, destination: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("Interrupted publication")
+        publish(temporary, destination)
+
+    installation_engine.publish_file = fail_once
+    try:
+        try:
+            manager.apply(plan, plan.fingerprint, replace_existing=True)
+        except ModMeshError as exc:
+            assert exc.details["recovery"] == "rolled_back"
+        else:
+            raise AssertionError("Interrupted installation was committed")
+    finally:
+        installation_engine.publish_file = publish
+    assert target.read_bytes() == b"user original" and not manager.installed()
+    plan = manager.plan(resolution, inputs, replace_existing=True)
+    manager.apply(plan, plan.fingerprint, replace_existing=True)
+    assert target.read_bytes() == b"new one" and len(manager.installed()) == 1
+    assert manager.installed()[0].mod == resolution.mods[0]
+    assert not manager.recover()
+    for mode in ("before", "after"):
+        game = root / mode
+        manager, resolution, inputs = temporary_installation(game)
+        target = game / "Pal/Content/Paks/~mods/One.pak"
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"crash original")
+        child = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "--install-crash", str(game), mode],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert child.returncode == 77, child.stderr
+        results = manager.recover()
+        assert len(results) == 1 and results[0].state == "rolled_back", results
+        assert target.read_bytes() == b"crash original" and not manager.installed()
+        assert not (target.parent / "Two.pak").exists() and not manager.recover()
+
+
 async def main() -> None:
     logging.disable(logging.CRITICAL)
     with TemporaryDirectory(prefix="modmesh-safety-") as name:
@@ -363,11 +463,14 @@ async def main() -> None:
         await asyncio.wait_for(check_cache(Path(name)), timeout=20)
         await check_processes(Path(name) / "processes")
         check_planning(Path(name))
-    print("Download, cache and installation-plan safety checks passed")
+        check_installation(Path(name) / "installation")
+    print("Download, cache, plan and installation/recovery safety checks passed")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 3 and sys.argv[1] == "--cache-worker":
+    if len(sys.argv) == 4 and sys.argv[1] == "--install-crash":
+        install_crash(Path(sys.argv[2]), sys.argv[3])
+    elif len(sys.argv) == 3 and sys.argv[1] == "--cache-worker":
         asyncio.run(cache_worker(Path(sys.argv[2])))
     else:
         asyncio.run(main())
