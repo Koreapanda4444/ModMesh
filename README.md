@@ -30,7 +30,7 @@ py -3.12 -m venv .venv
 .venv\Scripts\modmesh-cli cache clear
 ```
 
-`discover --game palworld --path <경로>`는 검증된 수동 게임 경로를 저장합니다. `download`에는 `versions`가 반환한 정확한 버전 ID를 사용하며, 파일이 모호하면 `--file`로 선택합니다. `--output`을 생략하면 캐시 경로를 반환하고, 지정하면 독립된 복사본으로 내보냅니다. `download` 명령은 파일 준비만 수행합니다.
+`discover --game palworld --path <경로>`는 검증된 수동 게임 경로를 저장합니다. Minecraft는 `--game minecraft`로 기본 게임 폴더 또는 Prism/MultiMC 인스턴스 폴더를 등록합니다. 여러 프로필이 같은 폴더를 다른 버전으로 사용하면 버전을 임의 선택하지 않습니다. `download`에는 `versions`가 반환한 정확한 버전 ID를 사용하며, 파일이 모호하면 `--file`로 선택합니다. `--output`을 생략하면 캐시 경로를 반환하고, 지정하면 독립된 복사본으로 내보냅니다. `download` 명령은 파일 준비만 수행합니다.
 
 `resolve`는 `download`와 같은 게임·출처·프로젝트·버전 선택 인자를 받아 필수 의존성을 해결합니다. 정확한 출처 버전 ID와 명시된 SemVer/NPM 범위를 지원하며, 여러 모드의 조건이 맞지 않으면 다른 후보를 탐색합니다. 선택 모드 버전은 고정되고 선택 의존성은 자동 설치하지 않습니다. `solved`와 `metadata_complete`는 각각 제공된 필수 조건의 해결 여부와 의존성 정보의 확인 여부입니다.
 
@@ -47,11 +47,12 @@ py -3.12 -m venv .venv
 | 대상 | 현재 범위와 검증 상태 |
 |---|---|
 | Palworld Windows Steam | 설치 경로·Steam build ID·Pak/UE4SS 모드 탐지. 실제 게임 설치와 모드 로딩은 미검증. |
+| Minecraft Java | 공식 런처의 로컬 프로필·버전 메타데이터와 Prism/MultiMC 인스턴스 탐지, JAR/비활성 JAR 외부 파일 조회. 게임 실행은 미검증. |
 | Modrinth | Minecraft Java 모드 검색·버전·로더·의존성·파일 조회. 실제 다운로드와 캐시 재사용 검증. |
 | Nexus Mods | 공개 인기 목록과 공식 사이트 인계. 전체 카탈로그 검색에는 제한이 있으며, 인증 상세·다운로드 API는 미검증. |
 | CurseForge | 승인 API 키와 배포 권한을 사용하는 Minecraft Java 모드 연동. 승인 계정 API·실다운로드는 미검증. |
 
-Minecraft 게임 인스턴스와 ARK 어댑터는 아직 구현하지 않았습니다. 실제 Modrinth 다운로드 검증은 실행 환경의 OS DNS 제한으로 공개 DoH 응답을 주입해 수행했으며, 제품 기본 경로는 OS DNS입니다.
+Minecraft 로더별 설치 규칙과 ARK 어댑터는 아직 구현하지 않았습니다. 실제 Modrinth 다운로드 검증은 실행 환경의 OS DNS 제한으로 공개 DoH 응답을 주입해 수행했으며, 제품 기본 경로는 OS DNS입니다.
 
 ## 설정
 

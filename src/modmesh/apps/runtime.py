@@ -2,6 +2,7 @@ import os
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 
+from modmesh.adapters.games.minecraft import MinecraftAdapter
 from modmesh.adapters.games.palworld import PalworldAdapter
 from modmesh.adapters.sources.curseforge import CurseForgeSource
 from modmesh.adapters.sources.modrinth import ModrinthSource
@@ -31,6 +32,7 @@ def source_priorities(overrides: Mapping[str, tuple[str, ...]]) -> SourcePriorit
 def create_game_registry() -> GameRegistry:
     registry = GameRegistry()
     registry.register(PalworldAdapter())
+    registry.register(MinecraftAdapter())
     return registry
 
 
