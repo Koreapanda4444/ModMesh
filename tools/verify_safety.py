@@ -16,6 +16,7 @@ import httpx
 
 import modmesh.core.installation as installation_engine
 import modmesh.core.processes as processes_engine
+import modmesh.core.profiles as profile_engine
 import modmesh.core.removal as removal_engine
 from modmesh.adapters.games.minecraft import MinecraftAdapter
 from modmesh.adapters.games.minecraft_mods import matches_native, read_jar, validate_native
@@ -32,6 +33,7 @@ from modmesh.core.installation import InstallationManager
 from modmesh.core.planning import InstallationPlanner, InstallInput
 from modmesh.core.priorities import SourcePriorities
 from modmesh.core.processes import java_guard
+from modmesh.core.profiles import ProfileManager
 from modmesh.core.removal import RemovalManager
 from modmesh.core.resolver import DependencyEdge, DependencyResolution, ResolvedMod
 from modmesh.core.sources import (
@@ -695,6 +697,91 @@ def check_shared_dependencies(root: Path) -> None:
     assert not manager.installed() and not (root / "Pal/Content/Paks/~mods/One.pak").exists()
 
 
+def profile_setup(root: Path):
+    manager, resolution, inputs = temporary_installation(root)
+    target = root / "Pal/Content/Paks/~mods/One.pak"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"original")
+    plan = manager.plan(resolution, inputs, replace_existing=True)
+    manager.apply(plan, plan.fingerprint, replace_existing=True)
+    profiles = ProfileManager(manager.games, manager.installation)
+    modded = profiles.create("Modded")
+    empty = profiles.create("Empty", capture=False)
+    return profiles, modded, empty
+
+
+def profile_crash(root: Path, mode: str) -> None:
+    profiles, modded, empty = profile_setup(root)
+    plan = profiles.plan_switch(empty.profile_id)
+    publish = profile_engine.publish_file
+
+    def interrupt(temporary: Path, destination: Path) -> None:
+        if mode == "after":
+            publish(temporary, destination)
+        os._exit(77)
+
+    profile_engine.publish_file = interrupt
+    profiles.switch(plan, plan.fingerprint)
+
+
+def check_profiles(root: Path) -> None:
+    profiles, modded, empty = profile_setup(root)
+    target = root / "Pal/Content/Paks/~mods/One.pak"
+    second = target.with_name("Two.pak")
+    external = target.with_name("external.pak")
+    external.write_bytes(b"external")
+    save = root / "save.dat"
+    save.write_bytes(b"user save")
+    for identity, expected in ((empty.profile_id, b"original"), (modded.profile_id, b"new one")):
+        plan = profiles.plan_switch(identity)
+        assert plan.applicable, plan.issues
+        assert profiles.switch(plan, plan.fingerprint).state == "committed"
+        assert profiles.active_id() == identity and target.read_bytes() == expected
+        assert second.exists() == (identity == modded.profile_id)
+        assert external.read_bytes() == b"external" and save.read_bytes() == b"user save"
+    assert len(profiles.installed()) == 1
+    previous = profiles.active_id()
+    plan = profiles.plan_switch(empty.profile_id)
+    cancelled = False
+
+    def interrupt(event):
+        nonlocal cancelled
+        cancelled = True
+
+    try:
+        profiles.switch(plan, plan.fingerprint, cancelled=lambda: cancelled, progress=interrupt)
+    except ModMeshError as exc:
+        assert exc.details["recovery"] == "rolled_back"
+    else:
+        raise AssertionError("Cancelled profile transition was committed")
+    assert profiles.active_id() == previous and target.read_bytes() == b"new one"
+    assert second.read_bytes() == b"new two"
+    target.write_bytes(b"user change")
+    try:
+        profiles.plan_switch(empty.profile_id)
+    except ModMeshError:
+        pass
+    else:
+        raise AssertionError("Modified managed file was accepted")
+    assert target.read_bytes() == b"user change"
+    for mode in ("before", "after"):
+        crashed = root.parent / ("profile-crash-" + mode)
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "--profile-crash", str(crashed), mode],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 77, result.stderr
+        manager, _, _ = temporary_installation(crashed)
+        recovered = manager.recover()
+        assert recovered and all(item.state == "rolled_back" for item in recovered)
+        assert (crashed / "Pal/Content/Paks/~mods/One.pak").read_bytes() == b"new one"
+        assert (crashed / "Pal/Content/Paks/~mods/Two.pak").read_bytes() == b"new two"
+        assert manager.installed()
+
+
 def check_minecraft(root: Path) -> None:
     for loader, uid, version in (
         ("fabric", "net.fabricmc.fabric-loader", "0.16.14"),
@@ -765,6 +852,30 @@ def check_minecraft(root: Path) -> None:
         target = game / "mods" / source.name
         assert target.read_bytes() == source.read_bytes()
         if loader == "fabric":
+            options = game / "options.txt"
+            options.write_bytes(b"initial settings")
+            profiles = ProfileManager(games, installation)
+            configured = profiles.create("Configured", settings=("options.txt",))
+            empty = profiles.create("Empty", capture=False)
+            initial = profiles.active_id()
+            for identity in (configured.profile_id, empty.profile_id):
+                transition = profiles.plan_switch(identity)
+                assert transition.applicable, transition.issues
+                profiles.switch(transition, transition.fingerprint)
+            assert options.read_bytes() == b"initial settings" and not target.exists()
+            options.write_bytes(b"other profile settings")
+            transition = profiles.plan_switch(configured.profile_id)
+            assert transition.applicable, transition.issues
+            profiles.switch(transition, transition.fingerprint)
+            assert options.read_bytes() == b"initial settings" and target.exists()
+            try:
+                profiles.delete(configured.profile_id)
+            except ModMeshError:
+                pass
+            else:
+                raise AssertionError("Active profile was deleted")
+            transition = profiles.plan_switch(initial)
+            profiles.switch(transition, transition.fingerprint)
             assert matches_native("0.8.12-beta.1+mc1.21.1", ("0.8.x",), "fabric")
             assert not matches_native("0.9.0-alpha", ("0.8.x",), "fabric")
             assert matches_native("1.21.1", (">=1.15-alpha.19.39.a",), "fabric")
@@ -902,6 +1013,7 @@ async def main() -> None:
         check_installation(Path(name) / "installation")
         check_shared_dependencies(Path(name) / "shared")
         check_minecraft(Path(name) / "minecraft")
+        check_profiles(Path(name) / "profiles")
     print("Download, cache, plan and installation/recovery safety checks passed")
 
 
@@ -910,6 +1022,8 @@ if __name__ == "__main__":
         install_crash(Path(sys.argv[2]), sys.argv[3])
     elif len(sys.argv) == 4 and sys.argv[1] == "--removal-crash":
         removal_crash(Path(sys.argv[2]), sys.argv[3])
+    elif len(sys.argv) == 4 and sys.argv[1] == "--profile-crash":
+        profile_crash(Path(sys.argv[2]), sys.argv[3])
     elif len(sys.argv) == 3 and sys.argv[1] == "--cache-worker":
         asyncio.run(cache_worker(Path(sys.argv[2])))
     else:

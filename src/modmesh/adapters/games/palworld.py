@@ -37,6 +37,7 @@ class PalworldAdapter(GameAdapter):
             GameCapability.VERSION,
             GameCapability.MOD_DISCOVERY,
             GameCapability.INSTALL_RULES,
+            GameCapability.PROFILES,
         }
     )
 

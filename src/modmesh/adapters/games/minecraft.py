@@ -153,6 +153,7 @@ class MinecraftAdapter(GameAdapter):
             GameCapability.MOD_DISCOVERY,
             GameCapability.INSTALL_RULES,
             GameCapability.REMOVAL_RULES,
+            GameCapability.PROFILES,
         }
     )
 
@@ -460,6 +461,26 @@ class MinecraftAdapter(GameAdapter):
                 *warnings,
                 *validate_native(installation, after, lost=frozenset(previous - remaining)).issues,
             )
+        )
+
+    def profile_settings(self, installation: GameInstallation) -> tuple[str, ...]:
+        return ("options.txt",)
+
+    def validate_profile(
+        self,
+        installation: GameInstallation,
+        files: tuple[tuple[str, Path], ...],
+        replaced: tuple[str, ...],
+    ) -> EnvironmentReport:
+        existing, warnings = self._jars(
+            installation, frozenset(path.casefold() for path in replaced)
+        )
+        selected = tuple(
+            (relative, read_jar(path, installation.loader.name if installation.loader else None))
+            for relative, path in files
+        )
+        return EnvironmentReport(
+            (*warnings, *validate_native(installation, (*existing, *selected)).issues)
         )
 
     def mod_locations(self, installation: GameInstallation) -> tuple[ModLocation, ...]:

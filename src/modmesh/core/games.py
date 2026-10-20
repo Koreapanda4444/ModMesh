@@ -130,6 +130,17 @@ class GameAdapter(ABC):
     ) -> EnvironmentReport:
         return EnvironmentReport()
 
+    def profile_settings(self, installation: GameInstallation) -> tuple[str, ...]:
+        return ()
+
+    def validate_profile(
+        self,
+        installation: GameInstallation,
+        files: tuple[tuple[str, Path], ...],
+        replaced: tuple[str, ...],
+    ) -> EnvironmentReport:
+        return EnvironmentReport()
+
     def mod_locations(self, installation: GameInstallation) -> tuple[ModLocation, ...]:
         raise ModMeshError(
             ErrorCode.UNSUPPORTED, "Mod locations are not implemented for this adapter"
