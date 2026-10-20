@@ -217,6 +217,7 @@ class InstallationPlanner:
         inputs: Sequence[InstallInput],
         *,
         managed: Mapping[str, FileHash] | None = None,
+        replacing: frozenset[str] | None = None,
         replace_existing: bool = False,
         cancelled: Callable[[], bool] | None = None,
     ) -> InstallationPlan:
@@ -372,8 +373,11 @@ class InstallationPlanner:
             verify_file(
                 item.path, (artifact.sha256,), expected_size=artifact.size, cancelled=cancelled
             )
-        native = adapter.validate_artifacts(
-            installation, tuple((item.mod.file, item.path) for item in inputs)
+        artifacts = tuple((item.mod.file, item.path) for item in inputs)
+        native = (
+            adapter.validate_artifacts(installation, artifacts)
+            if replacing is None
+            else adapter.validate_profile_payload(installation, artifacts, replacing)
         )
         issues.extend(
             PlanIssue(issue.code, issue.message) for issue in native.issues if issue.blocking

@@ -147,6 +147,14 @@ class PalworldAdapter(GameAdapter):
             )
         return tuple(rules)
 
+    def validate_profile_payload(
+        self,
+        installation: GameInstallation,
+        files: tuple[tuple[ModFile, Path], ...],
+        replaced: frozenset[str],
+    ) -> EnvironmentReport:
+        return EnvironmentReport()
+
     def validate_payload(
         self, installation: GameInstallation, rule: InstallRule, paths: tuple[str, ...]
     ) -> EnvironmentReport:

@@ -21,7 +21,7 @@ import modmesh.core.removal as removal_engine
 from modmesh.adapters.games.minecraft import MinecraftAdapter
 from modmesh.adapters.games.minecraft_mods import matches_native, read_jar, validate_native
 from modmesh.adapters.games.palworld import PalworldAdapter
-from modmesh.apps.operations import prepare_pack
+from modmesh.apps.operations import prepare_pack, prepare_pack_update
 from modmesh.core.alternatives import find_alternatives
 from modmesh.core.artifact_matching import ArtifactCandidate
 from modmesh.core.cache import ArtifactCache
@@ -33,6 +33,7 @@ from modmesh.core.hashing import verify_file
 from modmesh.core.identity import EvidenceKind, IdentityEvidence, IdentityRegistry
 from modmesh.core.installation import InstallationManager
 from modmesh.core.pack_io import export_profile, read_manifest, resolve_pack, write_manifest
+from modmesh.core.pack_versions import diff_manifests, save_version, versions
 from modmesh.core.packs import PackContext, PackEntry, PackManifest, PackSetting
 from modmesh.core.planning import InstallationPlanner, InstallInput
 from modmesh.core.priorities import SourcePriorities
@@ -748,6 +749,59 @@ async def check_pack_import(root: Path) -> None:
         assert (target.root / "Pal/Content/Paks/~mods/Two.pak").read_bytes() == b"new two"
     finally:
         prepared.close()
+    previous = manifest
+    with zipfile.ZipFile(inputs[0].path, "w") as archive:
+        archive.writestr("One.pak", b"version two")
+        archive.writestr("Three.pak", b"added file")
+    file = replace(
+        selected.file,
+        file_id="revision-two-file",
+        size=inputs[0].path.stat().st_size,
+        hashes=(
+            FileHash(HashAlgorithm.SHA256, hashlib.sha256(inputs[0].path.read_bytes()).hexdigest()),
+        ),
+    )
+    changed = replace(
+        selected,
+        file=file,
+        version=replace(selected.version, version_id="2", number="2", files=(file,)),
+    )
+    revised = replace(manifest, revision=2, entries=(PackEntry(changed, "palworld-pak"),))
+    difference = diff_manifests(previous, revised)
+    assert difference.updated == ("example:p",) and not difference.added and not difference.removed
+    provider.candidate = ArtifactCandidate(
+        changed.project, changed.version, changed.file, None, None
+    )
+    with ArtifactCache(settings.paths.cache_dir) as cache:
+
+        async def fetch_revision(path):
+            path.write_bytes(inputs[0].path.read_bytes())
+            return DownloadResult(
+                path, verify_file(path, file.hashes), "example", file.file_id, "example", "seed"
+            )
+
+        await cache.obtain(file, fetch_revision)
+    update = await prepare_pack_update(settings, registry, target.installation, revised)
+    assert update.plan.applicable, update.plan.issues
+    assert (target.root / "Pal/Content/Paks/~mods/Two.pak").exists()
+    update.manager.switch(update.plan, update.plan.fingerprint)
+    assert (target.root / "Pal/Content/Paks/~mods/One.pak").read_bytes() == b"version two"
+    assert not (target.root / "Pal/Content/Paks/~mods/Two.pak").exists()
+    assert (target.root / "Pal/Content/Paks/~mods/Three.pak").read_bytes() == b"added file"
+    assert versions(update.manager, revised.pack_id)[0].digest == revised.digest
+    try:
+        save_version(update.manager, replace(revised, name="changed immutable contents"))
+    except ModMeshError:
+        pass
+    else:
+        raise AssertionError("Immutable local pack version was overwritten")
+    empty = replace(revised, revision=3, entries=())
+    assert diff_manifests(revised, empty).removed == ("example:p",)
+    empty_update = await prepare_pack_update(settings, registry, target.installation, empty)
+    assert empty_update.plan.applicable, empty_update.plan.issues
+    empty_update.manager.switch(empty_update.plan, empty_update.plan.fingerprint)
+    assert not empty_update.manager.installed()
+    assert not tuple((target.root / "Pal/Content/Paks/~mods").glob("*.pak"))
     invalid_file = replace(selected.file, hashes=(FileHash(HashAlgorithm.SHA256, "0" * 64),))
     invalid_mod = replace(
         selected, file=invalid_file, version=replace(selected.version, files=(invalid_file,))
@@ -959,6 +1013,12 @@ def check_minecraft(root: Path) -> None:
         assert plan.applicable, plan.issues
         manager.apply(plan, plan.fingerprint)
         target = game / "mods" / source.name
+        assert target.read_bytes() == source.read_bytes()
+        staged_profiles = ProfileManager(games, installation)
+        payload = staged_profiles.payload_plan(resolution, (InstallInput(mod, source),))
+        staged = staged_profiles.stage_payload(payload, "Validated Minecraft pack")
+        assert staged.applicable, staged.issues
+        staged_profiles.switch(staged, staged.fingerprint)
         assert target.read_bytes() == source.read_bytes()
         if loader == "fabric":
             options = game / "options.txt"

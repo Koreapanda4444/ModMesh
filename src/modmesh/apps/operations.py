@@ -18,8 +18,10 @@ from modmesh.core.downloads import DownloadManager, DownloadPolicy, DownloadResu
 from modmesh.core.identity import IdentityRegistry
 from modmesh.core.installation import InstallationManager
 from modmesh.core.pack_io import resolve_pack, validate_context
+from modmesh.core.pack_versions import save_version
 from modmesh.core.packs import PackManifest
 from modmesh.core.planning import InstallationPlan, InstallInput
+from modmesh.core.profiles import ProfileManager, ProfilePlan
 from modmesh.core.resolver import DependencyResolution, ResolvedMod
 from modmesh.core.sources import SourceRegistry
 from modmesh.domain.models import GameInstallation, SourceRef
@@ -46,6 +48,7 @@ async def prepare_resolution(
     *,
     rule: str | None = None,
     recipes: Mapping[SourceRef, tuple[str | None, str]] | None = None,
+    profile_payload: bool = False,
     prefix: str = "",
     replace_existing: bool = False,
     cancelled: threading.Event | None = None,
@@ -111,6 +114,15 @@ async def prepare_resolution(
         if progress is not None:
             progress("검증한 파일의 변경 계획을 작성합니다.")
         manager = InstallationManager(create_game_registry(), installation)
+        if profile_payload:
+            manager = ProfileManager(manager.games, installation)
+            plan = await _blocking(
+                partial(
+                    manager.payload_plan, resolution, tuple(inputs), cancelled=cancellation.is_set
+                ),
+                cancellation,
+            )
+            return PreparedInstallation(plan, manager, temporary, False, tuple(source_notes))
         plan = await _blocking(
             partial(
                 manager.plan,
@@ -166,3 +178,56 @@ async def prepare_pack(
         )
     prepared.source_notes += manifest.warnings
     return prepared
+
+
+@dataclass(frozen=True)
+class PreparedPackUpdate:
+    manager: ProfileManager
+    plan: ProfilePlan
+    notes: tuple[str, ...] = ()
+
+
+async def prepare_pack_update(
+    settings: ClientSettings,
+    registry: SourceRegistry,
+    installation: GameInstallation,
+    manifest: PackManifest,
+    *,
+    cancelled: threading.Event | None = None,
+    progress: Callable[[object], None] | None = None,
+) -> PreparedPackUpdate:
+    validate_context(manifest, installation)
+    cancellation = cancelled or threading.Event()
+    with MetadataStore(settings.paths.database) as store:
+        resolution = await resolve_pack(
+            manifest,
+            registry,
+            identities=IdentityRegistry(store),
+            priorities=source_priorities(settings.source_priorities),
+        )
+    prepared = await prepare_resolution(
+        settings,
+        registry,
+        installation,
+        resolution,
+        recipes={
+            entry.mod.project.reference: (entry.rule_id, entry.prefix) for entry in manifest.entries
+        },
+        profile_payload=True,
+        cancelled=cancellation,
+        progress=progress,
+    )
+    try:
+        manager = ProfileManager(prepared.manager.games, installation)
+        save_version(manager, manifest)
+        plan = await _blocking(
+            partial(
+                manager.stage_payload,
+                prepared.plan,
+                (manifest.name + f" r{manifest.revision}")[:100],
+            ),
+            cancellation,
+        )
+        return PreparedPackUpdate(manager, plan, manifest.warnings)
+    finally:
+        prepared.close()

@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
+import zipfile
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.downloads import publish_file
+from modmesh.core.games import GameCapability
 from modmesh.core.installation import (
     OperationProgress,
     OperationResult,
@@ -17,9 +21,19 @@ from modmesh.core.installation import (
     _copy,
     _sync_dir,
 )
-from modmesh.core.planning import FileSnapshot, PlanIssue, portable_path, snapshot, target_path
+from modmesh.core.planning import (
+    FileSnapshot,
+    InstallationPlan,
+    InstallInput,
+    PlanIssue,
+    portable_path,
+    snapshot,
+    target_path,
+)
 from modmesh.core.removal import RemovalManager
+from modmesh.core.resolver import DependencyResolution
 from modmesh.domain.artifacts import FileHash, HashAlgorithm
+from modmesh.domain.dependencies import DependencyKind
 from modmesh.storage.installed import (
     ManagedMod,
     array_record,
@@ -164,6 +178,8 @@ class ProfileManager(RemovalManager):
         ):
             raise ModMeshError(ErrorCode.CONFLICT, "Recover incomplete operations first")
         adapter = self.games.get(self.installation.game_id)
+        if GameCapability.PROFILES not in adapter.capabilities:
+            raise ModMeshError(ErrorCode.UNSUPPORTED, "Game has no verified profile strategy")
         actual = adapter.inspect(self.root, self.installation.platform)
         if (
             actual is None
@@ -443,8 +459,13 @@ class ProfileManager(RemovalManager):
                     )
         native = adapter.validate_profile(
             self.installation,
-            tuple(
-                (item.path, self._blob(item.sha256)) for item in target.files if not item.setting
+            tuple((item.path, self._blob(item.sha256)) for item in target.files if not item.setting)
+            + tuple(
+                (change.path, self._blob(change.content_sha256))
+                for change in changes
+                if change.desired is None
+                and change.content_sha256 is not None
+                and not current[change.path.casefold()].setting
             ),
             tuple(
                 dict.fromkeys(
@@ -472,6 +493,115 @@ class ProfileManager(RemovalManager):
             tuple(issues),
             tuple(warnings),
         )
+
+    def payload_plan(
+        self,
+        resolution: DependencyResolution,
+        inputs: tuple[InstallInput, ...],
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> InstallationPlan:
+        with self._locked(create=True, cancelled=cancelled) as store:
+            assert store is not None
+            self._ready(store)
+            self._capture(store, "validation", "validation")
+            files = self._file_records(store)
+            return self.planner.build(
+                self.installation,
+                resolution,
+                inputs,
+                managed={
+                    string_record(value["path"]): FileHash(
+                        HashAlgorithm.SHA256, string_record(value["sha256"])
+                    )
+                    for value in files.values()
+                },
+                replacing=frozenset(string_record(value["path"]) for value in files.values()),
+                cancelled=cancelled,
+            )
+
+    def stage_payload(self, payload: InstallationPlan, name: str) -> ProfilePlan:
+        if payload.issues or len(name) > 100 or not name.strip():
+            raise ModMeshError(ErrorCode.CONFLICT, "Payload needs an applicable verified plan")
+        with self._locked(create=True) as store:
+            assert store is not None
+            self._ready(store)
+            current_files = self._file_records(store)
+            check = self.planner.build(
+                self.installation,
+                payload.resolution,
+                payload.inputs,
+                managed={
+                    string_record(value["path"]): FileHash(
+                        HashAlgorithm.SHA256, string_record(value["sha256"])
+                    )
+                    for value in current_files.values()
+                },
+                replacing=frozenset(
+                    string_record(value["path"]) for value in current_files.values()
+                ),
+            )
+            if check.fingerprint != payload.fingerprint or check.issues:
+                raise ModMeshError(ErrorCode.CONFLICT, "Payload changed before profile preparation")
+            if self._active(store) is None:
+                baseline = self._capture(store, str(uuid4()), "기존 구성")
+                store.put("profiles.items", baseline.profile_id, profile_record(baseline))
+                store.put("profiles.state", "active", {"id": baseline.profile_id})
+            files = []
+            with TemporaryDirectory(prefix="modmesh-profile-payload-") as directory:
+                for index, change in enumerate(payload.changes):
+                    stage = Path(directory) / str(index)
+                    if change.generated is not None:
+                        with io.BytesIO(change.generated) as stream:
+                            _copy(stream, stage, change.size, change.sha256)
+                    elif change.member is None:
+                        with change.source.open("rb") as stream:
+                            _copy(stream, stage, change.size, change.sha256)
+                    else:
+                        with (
+                            zipfile.ZipFile(change.source) as archive,
+                            archive.open(change.member) as stream,
+                        ):
+                            _copy(stream, stage, change.size, change.sha256)
+                    self._save_blob(stage)
+                    previous = current_files.get(change.destination.casefold(), {})
+                    original = previous.get("original_sha256")
+                    files.append(
+                        ProfileFile(
+                            change.destination,
+                            change.sha256,
+                            change.size,
+                            (mod_key(change.project),),
+                            string_record(original) if original else None,
+                        )
+                    )
+            mods = []
+            for mod in payload.resolution.mods:
+                recipe = next(item for item in payload.inputs if item.mod == mod)
+                mods.append(
+                    ManagedMod(
+                        mod,
+                        tuple(
+                            change.destination.casefold()
+                            for change in payload.changes
+                            if change.project == mod.project.reference
+                        ),
+                        tuple(
+                            dict.fromkeys(
+                                edge.target
+                                for edge in payload.resolution.edges
+                                if edge.parent == mod.project.reference
+                                and edge.declaration.kind == DependencyKind.REQUIRED
+                            )
+                        ),
+                        payload.plan_id,
+                        recipe.rule_id,
+                        recipe.prefix,
+                    )
+                )
+            profile = Profile(str(uuid4()), name.strip(), self.context(), tuple(mods), tuple(files))
+            store.put("profiles.items", profile.profile_id, profile_record(profile))
+            return self._switch_plan(store, profile.profile_id)
 
     def plan_switch(self, identity: str) -> ProfilePlan:
         with self._locked(create=True) as store:

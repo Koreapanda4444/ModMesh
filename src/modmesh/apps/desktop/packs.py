@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 from collections.abc import Callable
+from dataclasses import asdict
 from functools import partial
 from pathlib import Path
 
@@ -19,14 +20,21 @@ from PySide6.QtWidgets import (
 )
 
 from modmesh.apps.desktop.details import PlanDialog
+from modmesh.apps.desktop.profiles import ProfileDialog
 from modmesh.apps.desktop.search import WorkStarter
 from modmesh.apps.desktop.workers import report_progress, run_async
-from modmesh.apps.operations import PreparedInstallation, prepare_pack
+from modmesh.apps.operations import (
+    PreparedInstallation,
+    PreparedPackUpdate,
+    prepare_pack,
+    prepare_pack_update,
+)
 from modmesh.apps.runtime import source_registry
 from modmesh.core.config import ClientSettings
 from modmesh.core.games import GameRegistry
 from modmesh.core.installation import OperationResult
 from modmesh.core.pack_io import export_profile, read_manifest, write_manifest
+from modmesh.core.pack_versions import PackDiff, diff_manifests
 from modmesh.core.packs import PackManifest
 from modmesh.core.profiles import ProfileManager
 from modmesh.domain.models import GameInstallation
@@ -46,7 +54,8 @@ class PacksPanel(QWidget):
         self.generation = 0
         self.manifest: PackManifest | None = None
         self.prepared: PreparedInstallation | None = None
-        self.dialog: PlanDialog | None = None
+        self.dialog: PlanDialog | ProfileDialog | None = None
+        self.prepared_update: PreparedPackUpdate | None = None
         self.applying = False
         layout = QVBoxLayout(self)
         title = QLabel("모드팩")
@@ -86,6 +95,17 @@ class PacksPanel(QWidget):
         self.install.clicked.connect(self.prepare_import)
         self.install.setEnabled(False)
         layout.addWidget(self.install)
+        compare_row = QHBoxLayout()
+        self.previous_path = QLineEdit()
+        self.previous_path.setPlaceholderText("비교할 이전 Manifest JSON 경로")
+        compare_row.addWidget(self.previous_path, 1)
+        compare_button = QPushButton("버전 차이 비교")
+        compare_button.clicked.connect(self.compare)
+        compare_row.addWidget(compare_button)
+        self.update_button = QPushButton("팩 변경·버전 계획")
+        self.update_button.clicked.connect(self.prepare_update)
+        compare_row.addWidget(self.update_button)
+        layout.addLayout(compare_row)
         self.status = QLabel("게임 설치와 로컬 Manifest를 선택하세요.")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
@@ -97,6 +117,7 @@ class PacksPanel(QWidget):
         self.clear_plan()
 
     def clear_plan(self) -> None:
+        self.prepared_update = None
         if self.dialog:
             dialog, self.dialog = self.dialog, None
             dialog.reject()
@@ -261,6 +282,85 @@ class PacksPanel(QWidget):
         if generation == self.generation:
             self.status.setText("모드팩 설치 적용 완료 · 실제 게임 로딩은 별도 확인이 필요합니다.")
             self.install.setEnabled(self.manifest is not None)
+
+    def compare(self) -> None:
+        if self.manifest is None:
+            return
+        target, generation, path = self.manifest, self.generation, Path(self.previous_path.text())
+        self.start(
+            lambda cancelled: diff_manifests(read_manifest(path), target),
+            partial(self.compared, generation),
+            partial(self.failed, generation),
+            name="팩 버전 비교",
+        )
+
+    def compared(self, generation: int, value: object) -> None:
+        if generation == self.generation:
+            assert isinstance(value, PackDiff)
+            self.preview.setPlainText(json.dumps(asdict(value), ensure_ascii=False, indent=2))
+            self.status.setText(
+                "추가·제거·업데이트와 설정 차이입니다. 실제 파일은 변경 계획에서 확인하세요."
+            )
+
+    def prepare_update(self) -> None:
+        if self.installation is None or self.manifest is None or self.applying:
+            return
+        self.clear_plan()
+        installation, manifest, generation = self.installation, self.manifest, self.generation
+
+        def work(cancelled: threading.Event) -> PreparedPackUpdate:
+            async def execute() -> PreparedPackUpdate:
+                async with source_registry() as registry:
+                    return await prepare_pack_update(
+                        self.settings,
+                        registry,
+                        installation,
+                        manifest,
+                        cancelled=cancelled,
+                        progress=report_progress,
+                    )
+
+            return run_async(execute(), cancelled)
+
+        self.start(
+            work,
+            partial(self.update_ready, generation),
+            partial(self.failed, generation),
+            name="팩 변경 계획",
+        )
+
+    def update_ready(self, generation: int, value: object) -> None:
+        if generation != self.generation:
+            return
+        assert isinstance(value, PreparedPackUpdate)
+        self.prepared_update = value
+        self.dialog = ProfileDialog(value.plan, self, value.notes)
+        self.dialog.accepted.connect(self.apply_update)
+        self.dialog.rejected.connect(self.clear_plan)
+        self.dialog.open()
+        self.status.setText(
+            "새 팩 버전과 비활성 프로필을 저장했습니다. 승인하면 해당 구성으로 전환합니다."
+        )
+
+    def apply_update(self) -> None:
+        prepared, self.prepared_update = self.prepared_update, None
+        self.dialog = None
+        if prepared is None:
+            return
+        self.applying = True
+        self.install.setEnabled(False)
+        generation = self.generation
+        self.start(
+            lambda cancelled: prepared.manager.switch(
+                prepared.plan,
+                prepared.plan.fingerprint,
+                cancelled=cancelled.is_set,
+                progress=report_progress,
+            ),
+            partial(self.applied, generation),
+            partial(self.failed, generation),
+            name="팩 버전 적용",
+        )
 
     def failed(self, generation: int, message: str) -> None:
         self.applying = False

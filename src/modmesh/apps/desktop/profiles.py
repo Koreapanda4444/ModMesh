@@ -30,7 +30,9 @@ from modmesh.domain.models import GameInstallation
 
 
 class ProfileDialog(QDialog):
-    def __init__(self, plan: ProfilePlan, parent: QWidget) -> None:
+    def __init__(
+        self, plan: ProfilePlan, parent: QWidget, source_notes: tuple[str, ...] = ()
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("프로필 전환 계획")
         self.resize(850, 610)
@@ -47,7 +49,9 @@ class ProfileDialog(QDialog):
         notes.setReadOnly(True)
         notes.setPlainText(
             "\n".join(
-                [f"{item.code}: {item.message}" for item in plan.issues] + list(plan.warnings)
+                [f"{item.code}: {item.message}" for item in plan.issues]
+                + list(plan.warnings)
+                + list(source_notes)
             )
         )
         layout.addWidget(notes, 1)

@@ -133,6 +133,14 @@ class GameAdapter(ABC):
     def profile_settings(self, installation: GameInstallation) -> tuple[str, ...]:
         return ()
 
+    def validate_profile_payload(
+        self,
+        installation: GameInstallation,
+        files: tuple[tuple[ModFile, Path], ...],
+        replaced: frozenset[str],
+    ) -> EnvironmentReport:
+        raise ModMeshError(ErrorCode.UNSUPPORTED, "Profile payload validation is unavailable")
+
     def validate_profile(
         self,
         installation: GameInstallation,

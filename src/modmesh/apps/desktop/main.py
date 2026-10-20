@@ -239,6 +239,7 @@ class MainWindow(QMainWindow):
             "중단 작업 복구",
             "프로필 전환",
             "팩 설치 적용",
+            "팩 버전 적용",
         }:
             self.jobs.refresh_history()
         worker.deleteLater()
@@ -405,6 +406,8 @@ class MainWindow(QMainWindow):
     def _installation_changed(self) -> None:
         self.statusBar().showMessage("설치 기록이 갱신되었습니다.")
         self.installed_panel.refresh()
+        self.profiles_panel.refresh()
+        self.packs_panel.refresh()
 
     def _open_installed_project(self, group: object) -> None:
         self.navigation.setCurrentRow(1)

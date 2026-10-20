@@ -463,6 +463,37 @@ class MinecraftAdapter(GameAdapter):
             )
         )
 
+    def validate_profile_payload(
+        self,
+        installation: GameInstallation,
+        files: tuple[tuple[ModFile, Path], ...],
+        replaced: frozenset[str],
+    ) -> EnvironmentReport:
+        for _, path in files:
+            self._selected_jar(installation, path)
+        return EnvironmentReport(
+            (
+                EnvironmentIssue(
+                    "profile_native_pending",
+                    "Native dependencies are checked by the final profile switch plan",
+                ),
+            )
+        )
+
+    def _selected_jar(self, installation: GameInstallation, path: Path) -> JarMetadata:
+        loader = installation.loader
+        metadata = read_jar(path, loader.name if loader else None)
+        if (
+            loader
+            and loader.name == "neoforge"
+            and metadata.metadata_file != "META-INF/neoforge.mods.toml"
+            and not (loader.version or "").startswith("20.4.")
+        ):
+            raise ModMeshError(
+                ErrorCode.UNSUPPORTED, "This NeoForge version requires neoforge.mods.toml"
+            )
+        return metadata
+
     def profile_settings(self, installation: GameInstallation) -> tuple[str, ...]:
         return ("options.txt",)
 
@@ -476,8 +507,7 @@ class MinecraftAdapter(GameAdapter):
             installation, frozenset(path.casefold() for path in replaced)
         )
         selected = tuple(
-            (relative, read_jar(path, installation.loader.name if installation.loader else None))
-            for relative, path in files
+            (relative, self._selected_jar(installation, path)) for relative, path in files
         )
         return EnvironmentReport(
             (*warnings, *validate_native(installation, (*existing, *selected)).issues)
