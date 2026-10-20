@@ -2,7 +2,7 @@
 
 Python 3.12, PySide6, FastAPI 기반 데스크톱 모드 매니저입니다.
 
-현재 CLI에서 게임 탐지, 출처별 검색, 버전 조회, 필수 의존성 버전 해결, 해시 검증 다운로드와 캐시를 사용할 수 있습니다. 데스크톱은 게임 라이브러리·자동/수동 경로 등록·환경 상세와 마지막 게임 복원을 제공합니다. 모드 탐색은 게임·버전·로더·출처·정렬 필터, 출처별 제한 안내와 다음 페이지를 지원합니다. 프로젝트 상세에서 버전·파일·의존성을 조회하고 변경 계획을 검토·승인해 설치할 수 있습니다. 서버는 `/health`까지 구현했습니다. 모드 설치 전 변경 계획과 승인 적용·백업·중단 복구를 사용할 수 있습니다. 설치된 모드 화면에서 관리/외부 파일·사용자 변경·필수 의존성을 구분하고 다른 호환 버전 조회와 제거 계획을 실행할 수 있습니다. 다운로드/작업 화면은 대기열·전송/적용 진행·취소·조회 재시도·영속 저널과 중단 복구를 제공합니다. 파일 변경 작업은 새 계획 검토 후 다시 적용합니다. 게임별 로컬 프로필 Core는 관리 모드 파일의 구성 저장·복제·전환과 원본 복원·중단 복구를 제공합니다. 프로필 화면에서 생성·복제·이름 변경·삭제와 전환 계획 검토를 사용할 수 있으며, 상단에서 활성 프로필을 선택합니다. 모드팩 화면은 프로필 Manifest Export와 로컬 파일 검증·출처 재확인·설치 계획 Import를 제공합니다. 계정 기능은 개발 중입니다.
+현재 CLI에서 게임 탐지, 출처별 검색, 버전 조회, 필수 의존성 버전 해결, 해시 검증 다운로드와 캐시를 사용할 수 있습니다. 데스크톱은 게임 라이브러리·자동/수동 경로 등록·환경 상세와 마지막 게임 복원을 제공합니다. 모드 탐색은 게임·버전·로더·출처·정렬 필터, 출처별 제한 안내와 다음 페이지를 지원합니다. 프로젝트 상세에서 버전·파일·의존성을 조회하고 변경 계획을 검토·승인해 설치할 수 있습니다. 서버는 DB 준비 상태·API 정보와 PostgreSQL/Alembic 마이그레이션을 제공합니다. 모드 설치 전 변경 계획과 승인 적용·백업·중단 복구를 사용할 수 있습니다. 설치된 모드 화면에서 관리/외부 파일·사용자 변경·필수 의존성을 구분하고 다른 호환 버전 조회와 제거 계획을 실행할 수 있습니다. 다운로드/작업 화면은 대기열·전송/적용 진행·취소·조회 재시도·영속 저널과 중단 복구를 제공합니다. 파일 변경 작업은 새 계획 검토 후 다시 적용합니다. 게임별 로컬 프로필 Core는 관리 모드 파일의 구성 저장·복제·전환과 원본 복원·중단 복구를 제공합니다. 프로필 화면에서 생성·복제·이름 변경·삭제와 전환 계획 검토를 사용할 수 있으며, 상단에서 활성 프로필을 선택합니다. 모드팩 화면은 프로필 Manifest Export와 로컬 파일 검증·출처 재확인·설치 계획 Import를 제공합니다. 계정 기능은 개발 중입니다.
 
 ## 설치 및 실행
 
@@ -66,7 +66,7 @@ Minecraft 다중 출처는 선택 인스턴스의 게임 버전·로더로 조�
 
 클라이언트는 `--config <TOML>` 또는 `MODMESH_CONFIG`로 설정을 지정합니다. 기본 파일은 `%APPDATA%/ModMesh/config.toml`이며, 없으면 기본값을 사용합니다. `[client]`에는 `data_dir`, `cache_dir`, `cache_max_bytes`, `server_url`, `log_level`과 `source_priorities`를 지정할 수 있습니다. `MODMESH_DATA_DIR`, `MODMESH_CACHE_DIR`, `MODMESH_CACHE_MAX_BYTES`, `MODMESH_SERVER_URL`, `MODMESH_LOG_LEVEL` 환경 변수가 우선합니다.
 
-서버는 `--config` 또는 `MODMESH_SERVER_CONFIG`의 `[server]` 설정과 `MODMESH_BIND_HOST`, `MODMESH_BIND_PORT`, `MODMESH_ENV`, `MODMESH_DATABASE_URL`, `MODMESH_LOG_LEVEL`을 사용합니다. 현재 health API는 DB 없이 동작합니다.
+서버는 `--config` 또는 `MODMESH_SERVER_CONFIG`의 `[server]` 설정과 `MODMESH_BIND_HOST`, `MODMESH_BIND_PORT`, `MODMESH_ENV`, `MODMESH_DATABASE_URL`, `MODMESH_LOG_LEVEL`을 사용합니다. 개발 모드의 DB 없는 health는 `database: disabled`로 표시합니다. 운영 모드는 PostgreSQL URL이 필수이며, 먼저 `modmesh-server --migrate`를 실행하고 서버를 시작합니다. 마이그레이션은 서버 시작 시 자동 실행하지 않습니다. `--check`는 지정한 DB를 검사하며, DB를 지정하지 않은 개발 검사는 임시 SQLite에서 수행합니다.
 
 출처 API 키는 `MODMESH_NEXUS_API_KEY`, `MODMESH_CURSEFORGE_API_KEY` 환경 변수로 전달합니다. 인증·배포 제한이 있으면 공식 사이트로 인계하며 직접 다운로드 권한을 우회하지 않습니다.
 
@@ -84,4 +84,4 @@ Minecraft 다중 출처는 선택 인스턴스의 게임 버전·로더로 조�
 .venv\Scripts\python tools/verify_safety.py
 ```
 
-화면 없는 환경은 `QT_QPA_PLATFORM=offscreen`을 설정합니다. CI는 Windows·Ubuntu에서 빌드·설치, 기본 실행과 다운로드·캐시 파일 보호를 검증합니다.
+화면 없는 환경은 `QT_QPA_PLATFORM=offscreen`을 설정합니다. CI는 Windows·Ubuntu에서 빌드·설치·기본 실행·파일 보호·SQLite 마이그레이션을 검증하고, 별도 PostgreSQL 컨테이너에서 마이그레이션 반복 적용과 API 준비 상태를 검사합니다.

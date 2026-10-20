@@ -30,3 +30,9 @@ uvicorn==0.54.0
 wheel==0.45.1
 socksio==1.0.0
 psutil==7.2.2
+alembic==1.20.0
+psycopg==3.3.6
+psycopg-binary==3.3.6
+Mako==1.4.3
+MarkupSafe==3.0.4
+tzdata==2026.5

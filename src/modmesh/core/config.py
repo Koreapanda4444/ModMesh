@@ -109,6 +109,8 @@ class ServerSettings:
             raise ConfigurationError("Server port must be between 1 and 65535")
         if self.environment not in {"development", "production"}:
             raise ConfigurationError("Environment must be development or production")
+        if self.environment == "production" and self.database_url is None:
+            raise ConfigurationError("Production server requires PostgreSQL configuration")
         if self.database_url is not None:
             from sqlalchemy.engine import make_url
             from sqlalchemy.exc import ArgumentError
