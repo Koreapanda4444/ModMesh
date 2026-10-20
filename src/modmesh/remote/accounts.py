@@ -83,7 +83,13 @@ class AccountClient:
                 self._remembered = False
 
     def request(
-        self, method: str, path: str, body: object = None, *, authenticated: bool = True
+        self,
+        method: str,
+        path: str,
+        body: object = None,
+        *,
+        authenticated: bool = True,
+        params: dict[str, int] | None = None,
     ) -> dict[str, object]:
         if not path.startswith("/v1/") or "?" in path or "#" in path or ".." in path:
             raise ModMeshError(ErrorCode.VALIDATION, "Invalid server API path")
@@ -100,7 +106,7 @@ class AccountClient:
                         timeout=20, follow_redirects=False, transport=self.transport
                     ) as client,
                     client.stream(
-                        method, self.server + path, json=body, headers=headers
+                        method, self.server + path, json=body, headers=headers, params=params
                     ) as response,
                 ):
                     if response.status_code == 401 and authenticated:

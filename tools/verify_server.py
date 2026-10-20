@@ -22,6 +22,8 @@ from modmesh.apps.server.main import MAX_REQUEST_BYTES, create_app
 from modmesh.apps.server.schema import auth_tokens, sessions, users
 from modmesh.core.config import ServerSettings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
+from modmesh.core.packs import PackContext, PackManifest
+from modmesh.domain.models import Loader, Platform
 
 
 class MailSink:
@@ -208,6 +210,77 @@ async def verify_authentication(client, app, database, sink):
     return {"owner": owner, "owner_info": owner_info, "other": other, "other_info": other_info}
 
 
+async def verify_publishing(client, identities):
+    owner, other = identities["owner"], identities["other"]
+    context = PackContext(
+        "minecraft", "java", Platform.WINDOWS, "1.21.1", None, Loader("fabric", "0.16.14")
+    )
+    manifest = PackManifest.create("Published pack", context, ())
+    pack_id = manifest.pack_id
+    path = "/v1/packs/" + pack_id
+
+    async def call(method, endpoint, body=None, headers=owner, expected=200):
+        response = await client.request(method, endpoint, json=body, headers=headers)
+        assert response.status_code == expected, (endpoint, response.status_code, response.text)
+        assert response.headers.get("cache-control") == "no-store"
+        return response.json()
+
+    body = {"manifest_json": manifest.dumps().decode(), "visibility": "private"}
+    await call("POST", "/v1/packs", body, headers={}, expected=401)
+    await call("POST", "/v1/packs", {**body, "owner_id": "forged"}, expected=422)
+    await call("POST", "/v1/packs", {**body, "manifest_json": '{"secret":"x"}'}, expected=422)
+    await call("POST", "/v1/packs", {**body, "manifest_json": '{"a":1,"a":2}'}, expected=422)
+    created = await call("POST", "/v1/packs", body, expected=201)
+    assert created["owner_id"] == identities["owner_info"]["id"]
+    await call("POST", "/v1/packs", body, expected=409)
+    assert pack_id in [item["id"] for item in (await call("GET", "/v1/account/packs"))["packs"]]
+    assert pack_id not in [
+        item["id"] for item in (await call("GET", "/v1/account/packs", headers=other))["packs"]
+    ]
+    for endpoint in (path, path + "/versions", path + "/versions/1"):
+        await call("GET", endpoint, headers={}, expected=404)
+        await call("GET", endpoint, headers=other, expected=404)
+    original = await call("GET", path + "/versions/1")
+    assert original["digest"] == manifest.digest
+    edit = {"visibility": "public", "description": "Shared description", "archived": False}
+    await call("PATCH", path, edit, headers=other, expected=404)
+    await call("PATCH", path, edit)
+    assert (await call("GET", path, headers={}))["visibility"] == "public"
+    assert (await call("GET", path + "/versions/1", headers={}))["digest"] == manifest.digest
+    newer = replace(manifest, name="Published v2", revision=2)
+    version_body = {"manifest_json": newer.dumps().decode(), "expected_revision": 1}
+    await call("POST", path + "/versions", version_body, headers=other, expected=404)
+    raced = await asyncio.gather(
+        *(client.post(path + "/versions", json=version_body, headers=owner) for _ in range(2))
+    )
+    assert sorted(response.status_code for response in raced) == [201, 409]
+    assert (await call("GET", path + "/versions/1"))["digest"] == original["digest"]
+    await call("POST", path + "/versions", version_body, expected=409)
+    await call(
+        "PATCH", path + "/versions/1", {"manifest_json": newer.dumps().decode()}, expected=405
+    )
+    history = await call("GET", path + "/versions?limit=1")
+    assert len(history["versions"]) == 1 and history["next_offset"] == 1
+    second = await call("GET", path + "/versions?limit=1&offset=1")
+    assert second["versions"][0]["revision"] == 1
+    await call("PATCH", path, {**edit, "visibility": "unlisted"})
+    await call("GET", path, headers={}, expected=404)
+    await call("PATCH", path, {**edit, "archived": True})
+    await call("GET", path + "/versions/1", headers={}, expected=404)
+    await call(
+        "POST",
+        path + "/versions",
+        {"manifest_json": replace(newer, revision=3).dumps().decode(), "expected_revision": 2},
+        expected=409,
+    )
+    await call("PATCH", path, edit)
+    assert (await call("GET", path + "/versions/2", headers={}))["digest"] == newer.digest
+    print(
+        "Publishing ownership, private access, immutable history, races and archive checks passed"
+    )
+    return {"manifest": manifest, "newer": newer, "owner": owner, "other": other}
+
+
 async def verify(url: str) -> None:
     database = Database(url)
     try:
@@ -232,7 +305,8 @@ async def verify(url: str) -> None:
                 "/unknown", content=b"x", headers={"content-length": str(MAX_REQUEST_BYTES + 1)}
             )
             assert response.status_code == 413
-            await verify_authentication(client, app, database, sink)
+            identities = await verify_authentication(client, app, database, sink)
+            await verify_publishing(client, identities)
         print(f"Server migrations, readiness and body bounds passed: {database.backend}")
     finally:
         database.close()

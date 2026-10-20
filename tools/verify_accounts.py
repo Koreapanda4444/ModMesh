@@ -6,6 +6,7 @@ import json
 import os
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -14,11 +15,14 @@ import httpx
 from PySide6.QtWidgets import QApplication
 
 from modmesh.apps.desktop.accounts import AccountPanel
+from modmesh.apps.desktop.publishing import PublishingPanel
 from modmesh.apps.desktop.workers import Worker
 from modmesh.apps.server.database import Database
 from modmesh.apps.server.main import create_app
 from modmesh.core.config import AppPaths, ClientSettings, ServerSettings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError, redact_text
+from modmesh.core.packs import PackContext, PackManifest
+from modmesh.domain.models import Platform
 from modmesh.remote.accounts import AccountClient
 from modmesh.storage.metadata import MetadataStore
 
@@ -142,16 +146,49 @@ def verify():
             panel.execute()
             wait()
             assert panel.account["email"] == email and not panel.password.text()
+            online = PublishingPanel(panel, start)
+            manifest = PackManifest.create(
+                "Desktop published pack",
+                PackContext("minecraft", "java", Platform.WINDOWS, "1.21.1", None, None),
+                (),
+            )
+            path = root / "publish.json"
+            path.write_bytes(manifest.dumps())
+            online.path.setText(str(path))
+            online.publish()
+            wait()
+            assert len(online.records) == 1, online.status.text()
+            online.list.selectRow(0)
+            wait()
+            assert online.revisions[0]["digest"] == manifest.digest
+            online.version_list.selectRow(0)
+            online.preview_version()
+            wait()
+            assert manifest.pack_id in online.preview.toPlainText()
+            newer = replace(manifest, name="Desktop v2", revision=2)
+            path.write_bytes(newer.dumps())
+            online.publish(True)
+            wait()
+            assert online.records[0]["latest_revision"] == 2
+            online.list.selectRow(0)
+            wait()
+            assert {row["revision"] for row in online.revisions} == {1, 2}
+            online.description.setText("Updated from desktop")
+            online.edit()
+            wait()
+            assert online.records[0]["description"] == "Updated from desktop"
             panel.logout()
             wait()
             assert panel.account is None
+            assert not online.records and not online.preview.toPlainText()
+            online.close()
             panel.server.setText("http://127.0.0.1")
             panel.select_server()
             wait()
             assert panel.account is None and store.get("desktop", "server")["url"]
             panel.close()
         database.close()
-    print("Account UI, server isolation, token vault, revocation and redirect safety passed")
+    print("Account/publishing UI, server isolation, token vault and revocation safety passed")
 
 
 if __name__ == "__main__":

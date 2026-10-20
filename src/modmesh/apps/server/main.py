@@ -25,6 +25,7 @@ from modmesh.apps.server.auth import Authentication
 from modmesh.apps.server.auth_routes import router as auth_router
 from modmesh.apps.server.database import Database
 from modmesh.apps.server.mail import Mailer, SMTPMailer
+from modmesh.apps.server.pack_routes import router as pack_router
 from modmesh.core.config import ConfigurationError, ServerSettings, load_server_settings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError, configure_logging
 
@@ -97,6 +98,7 @@ def create_app(
         Authentication(database, settings, mailer or SMTPMailer(settings)) if database else None
     )
     app.include_router(auth_router)
+    app.include_router(pack_router)
 
     @app.middleware("http")
     async def no_store(request: Request, call_next: RequestResponseEndpoint) -> Response:

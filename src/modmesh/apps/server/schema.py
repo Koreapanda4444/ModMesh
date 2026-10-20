@@ -1,4 +1,14 @@
-from sqlalchemy import BigInteger, Boolean, Column, ForeignKey, Integer, MetaData, String, Table
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Column,
+    ForeignKey,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+)
 
 metadata = MetaData()
 users = Table(
@@ -45,4 +55,26 @@ rate_limits = Table(
     Column("bucket", String(64), primary_key=True),
     Column("attempts", Integer, nullable=False),
     Column("expires_at", BigInteger, nullable=False, index=True),
+)
+packs = Table(
+    "packs",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("owner_id", String(36), ForeignKey("users.id"), nullable=False, index=True),
+    Column("name", String(100), nullable=False),
+    Column("description", String(2000), nullable=False),
+    Column("visibility", String(16), nullable=False),
+    Column("latest_revision", Integer, nullable=False),
+    Column("archived", Boolean, nullable=False),
+    Column("created_at", BigInteger, nullable=False),
+    Column("updated_at", BigInteger, nullable=False),
+)
+pack_versions = Table(
+    "pack_versions",
+    metadata,
+    Column("pack_id", String(36), ForeignKey("packs.id"), primary_key=True),
+    Column("revision", Integer, primary_key=True),
+    Column("manifest_json", Text, nullable=False),
+    Column("digest", String(64), nullable=False),
+    Column("created_at", BigInteger, nullable=False),
 )

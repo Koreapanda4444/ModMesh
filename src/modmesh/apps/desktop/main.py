@@ -39,6 +39,7 @@ from modmesh.apps.desktop.installed import InstalledPanel
 from modmesh.apps.desktop.jobs import JobsPanel
 from modmesh.apps.desktop.packs import PacksPanel
 from modmesh.apps.desktop.profiles import ProfilesPanel
+from modmesh.apps.desktop.publishing import PublishingPanel
 from modmesh.apps.desktop.search import SearchPanel
 from modmesh.apps.desktop.widgets import fill_row, table
 from modmesh.apps.desktop.workers import Worker
@@ -204,6 +205,9 @@ class MainWindow(QMainWindow):
         self.account_panel.state_changed.connect(self.account_label.setText)
         self.pages.addWidget(self.account_panel)
         self.navigation.addItem("계정")
+        self.publishing_panel = PublishingPanel(self.account_panel, self.start_work)
+        self.pages.addWidget(self.publishing_panel)
+        self.navigation.addItem("온라인 팩")
         outer.addLayout(body, 1)
         self.setCentralWidget(content)
         self.navigation.setCurrentRow(0)
