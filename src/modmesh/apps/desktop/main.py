@@ -36,6 +36,7 @@ from modmesh import __version__
 from modmesh.apps.desktop.details import ModDetails
 from modmesh.apps.desktop.installed import InstalledPanel
 from modmesh.apps.desktop.jobs import JobsPanel
+from modmesh.apps.desktop.profiles import ProfilesPanel
 from modmesh.apps.desktop.search import SearchPanel
 from modmesh.apps.desktop.widgets import fill_row, table
 from modmesh.apps.desktop.workers import Worker
@@ -49,6 +50,7 @@ from modmesh.core.discovery import (
     current_platform,
 )
 from modmesh.core.games import DiscoveryContext, GameRegistry
+from modmesh.core.profiles import Profile
 from modmesh.storage.metadata import MetadataStore
 
 
@@ -99,10 +101,15 @@ class MainWindow(QMainWindow):
         header.addWidget(brand)
         header.addSpacing(28)
         self.game_selector = QComboBox()
-        self.game_selector.setMinimumWidth(360)
+        self.game_selector.setMinimumWidth(270)
         self.game_selector.addItem("게임을 선택하세요")
         self.game_selector.currentIndexChanged.connect(self._select_game)
         header.addWidget(self.game_selector)
+        self.profile_selector = QComboBox()
+        self.profile_selector.setMinimumWidth(190)
+        self.profile_selector.addItem("프로필을 선택하세요", None)
+        self.profile_selector.currentIndexChanged.connect(self._profile_choice)
+        header.addWidget(self.profile_selector)
         header.addStretch()
         header.addWidget(QLabel("게스트 · 로컬 모드 관리"))
         outer.addLayout(header)
@@ -180,6 +187,11 @@ class MainWindow(QMainWindow):
         self.jobs = JobsPanel(self.games, self.start_work)
         self.pages.addWidget(self.jobs)
         self.navigation.addItem("다운로드 / 작업")
+        self.profiles_panel = ProfilesPanel(
+            self.games, self.start_work, self._installation_changed, self._profiles_loaded
+        )
+        self.pages.addWidget(self.profiles_panel)
+        self.navigation.addItem("프로필")
         outer.addLayout(body, 1)
         self.setCentralWidget(content)
         self.navigation.setCurrentRow(0)
@@ -215,7 +227,12 @@ class MainWindow(QMainWindow):
 
     def _worker_finished(self, worker: Worker) -> None:
         self.workers.discard(worker)
-        if not self.closing and worker.name in {"설치 적용", "제거 적용", "중단 작업 복구"}:
+        if not self.closing and worker.name in {
+            "설치 적용",
+            "제거 적용",
+            "중단 작업 복구",
+            "프로필 전환",
+        }:
             self.jobs.refresh_history()
         worker.deleteLater()
 
@@ -337,6 +354,7 @@ class MainWindow(QMainWindow):
         self.mod_details.set_context(record.installation if record else None)
         self.installed_panel.set_context(record.installation if record else None)
         self.jobs.set_context(record.installation if record else None)
+        self.profiles_panel.set_context(record.installation if record else None)
         if record is None:
             self.game_details.setPlainText(
                 "탐지된 설치 경로가 없습니다. 게임과 OS 지원 범위를 확인하고 폴더를 등록하세요."
@@ -359,6 +377,22 @@ class MainWindow(QMainWindow):
         details.extend(issue.message for issue in record.validation.issues)
         details.append("게임 실행과 실제 모드 로딩은 별도 확인이 필요합니다.")
         self.game_details.setPlainText("\n\n".join(details))
+
+    def _profiles_loaded(self, profiles: tuple[Profile, ...], active: str | None) -> None:
+        self.profile_selector.blockSignals(True)
+        self.profile_selector.clear()
+        if not profiles:
+            self.profile_selector.addItem("프로필을 생성하세요", None)
+        for profile in profiles:
+            self.profile_selector.addItem(profile.name, profile.profile_id)
+        self.profile_selector.setCurrentIndex(max(0, self.profile_selector.findData(active)))
+        self.profile_selector.blockSignals(False)
+
+    def _profile_choice(self, index: int) -> None:
+        identity = self.profile_selector.itemData(index)
+        if identity and identity != self.profiles_panel.active:
+            self._profiles_loaded(self.profiles_panel.items, self.profiles_panel.active)
+            self.profiles_panel.preview_switch(str(identity))
 
     def _installation_changed(self) -> None:
         self.statusBar().showMessage("설치 기록이 갱신되었습니다.")
