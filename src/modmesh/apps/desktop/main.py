@@ -36,6 +36,7 @@ from modmesh import __version__
 from modmesh.apps.desktop.details import ModDetails
 from modmesh.apps.desktop.installed import InstalledPanel
 from modmesh.apps.desktop.jobs import JobsPanel
+from modmesh.apps.desktop.packs import PacksPanel
 from modmesh.apps.desktop.profiles import ProfilesPanel
 from modmesh.apps.desktop.search import SearchPanel
 from modmesh.apps.desktop.widgets import fill_row, table
@@ -192,6 +193,11 @@ class MainWindow(QMainWindow):
         )
         self.pages.addWidget(self.profiles_panel)
         self.navigation.addItem("프로필")
+        self.packs_panel = PacksPanel(
+            settings, self.games, self.start_work, self._installation_changed
+        )
+        self.pages.addWidget(self.packs_panel)
+        self.navigation.addItem("모드팩")
         outer.addLayout(body, 1)
         self.setCentralWidget(content)
         self.navigation.setCurrentRow(0)
@@ -215,7 +221,7 @@ class MainWindow(QMainWindow):
     ) -> Worker:
         worker = Worker(work)
         worker.name = name
-        worker.always_start = name in {"설치 적용", "제거 적용"}
+        worker.always_start = name in {"설치 적용", "제거 적용", "팩 설치 적용"}
         if self.closing:
             worker.cancel()
         self.workers.add(worker)
@@ -232,6 +238,7 @@ class MainWindow(QMainWindow):
             "제거 적용",
             "중단 작업 복구",
             "프로필 전환",
+            "팩 설치 적용",
         }:
             self.jobs.refresh_history()
         worker.deleteLater()
@@ -355,6 +362,7 @@ class MainWindow(QMainWindow):
         self.installed_panel.set_context(record.installation if record else None)
         self.jobs.set_context(record.installation if record else None)
         self.profiles_panel.set_context(record.installation if record else None)
+        self.packs_panel.set_context(record.installation if record else None)
         if record is None:
             self.game_details.setPlainText(
                 "탐지된 설치 경로가 없습니다. 게임과 OS 지원 범위를 확인하고 폴더를 등록하세요."
@@ -412,6 +420,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(100, self.close)
         else:
             self.mod_details.clear_plan()
+            self.packs_panel.clear_plan()
             event.accept()
 
 

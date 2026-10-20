@@ -21,15 +21,18 @@ import modmesh.core.removal as removal_engine
 from modmesh.adapters.games.minecraft import MinecraftAdapter
 from modmesh.adapters.games.minecraft_mods import matches_native, read_jar, validate_native
 from modmesh.adapters.games.palworld import PalworldAdapter
+from modmesh.apps.operations import prepare_pack
 from modmesh.core.alternatives import find_alternatives
 from modmesh.core.artifact_matching import ArtifactCandidate
 from modmesh.core.cache import ArtifactCache
+from modmesh.core.config import AppPaths, ClientSettings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.downloads import DownloadManager, DownloadPolicy, DownloadResult, DownloadState
 from modmesh.core.games import GameRegistry
 from modmesh.core.hashing import verify_file
 from modmesh.core.identity import EvidenceKind, IdentityEvidence, IdentityRegistry
 from modmesh.core.installation import InstallationManager
+from modmesh.core.pack_io import export_profile, read_manifest, resolve_pack, write_manifest
 from modmesh.core.packs import PackContext, PackEntry, PackManifest, PackSetting
 from modmesh.core.planning import InstallationPlanner, InstallInput
 from modmesh.core.priorities import SourcePriorities
@@ -698,6 +701,67 @@ def check_shared_dependencies(root: Path) -> None:
     assert not manager.installed() and not (root / "Pal/Content/Paks/~mods/One.pak").exists()
 
 
+async def check_pack_import(root: Path) -> None:
+    manager, resolution, inputs = temporary_installation(root / "source")
+    plan = manager.plan(resolution, inputs)
+    manager.apply(plan, plan.fingerprint)
+    profiles = ProfileManager(manager.games, manager.installation)
+    profile = profiles.create("Export")
+    manifest = export_profile(profiles, profile.profile_id)
+    destination = root / "portable.modmesh.json"
+    write_manifest(destination, manifest)
+    assert read_manifest(destination).digest == manifest.digest
+    try:
+        write_manifest(destination, manifest)
+    except FileExistsError:
+        pass
+    else:
+        raise AssertionError("Existing manifest was overwritten")
+    assert str(root) not in destination.read_text()
+    target, _, _ = temporary_installation(root / "target")
+    settings = ClientSettings(AppPaths(root / "cfg", root / "data", root / "cache"))
+    selected = manifest.entries[0].mod
+    candidate = ArtifactCandidate(selected.project, selected.version, selected.file, None, None)
+    provider = LinkedSource(candidate, ACCESS)
+    provider._descriptor = replace(provider.descriptor, games=frozenset({"palworld"}))
+    registry = SourceRegistry()
+    registry.register(provider)
+    with ArtifactCache(settings.paths.cache_dir) as cache:
+
+        async def fetch(path):
+            path.write_bytes(inputs[0].path.read_bytes())
+            return DownloadResult(
+                path,
+                verify_file(path, selected.file.hashes),
+                "example",
+                selected.file.file_id,
+                "example",
+                "seed",
+            )
+
+        await cache.obtain(selected.file, fetch)
+    prepared = await prepare_pack(settings, registry, target.installation, manifest)
+    try:
+        assert prepared.plan.applicable, prepared.plan.issues
+        assert prepared.manager.apply(prepared.plan, prepared.plan.fingerprint).state == "committed"
+        assert (target.root / "Pal/Content/Paks/~mods/One.pak").read_bytes() == b"new one"
+        assert (target.root / "Pal/Content/Paks/~mods/Two.pak").read_bytes() == b"new two"
+    finally:
+        prepared.close()
+    invalid_file = replace(selected.file, hashes=(FileHash(HashAlgorithm.SHA256, "0" * 64),))
+    invalid_mod = replace(
+        selected, file=invalid_file, version=replace(selected.version, files=(invalid_file,))
+    )
+    invalid = replace(manifest, entries=(replace(manifest.entries[0], mod=invalid_mod),))
+    try:
+        await resolve_pack(invalid, registry)
+    except ModMeshError as exc:
+        assert exc.code == ErrorCode.INTEGRITY
+    else:
+        raise AssertionError("Changed source file metadata was accepted")
+    await registry.aclose()
+
+
 def check_manifests(root: Path) -> None:
     manager, resolution, inputs = temporary_installation(root)
     entry = PackEntry(resolution.mods[0], "palworld-pak")
@@ -1060,6 +1124,7 @@ async def main() -> None:
         check_minecraft(Path(name) / "minecraft")
         check_profiles(Path(name) / "profiles")
         check_manifests(Path(name) / "manifests")
+        await check_pack_import(Path(name) / "pack-import")
     print("Download, cache, plan and installation/recovery safety checks passed")
 
 

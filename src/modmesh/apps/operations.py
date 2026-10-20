@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -17,10 +17,12 @@ from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.downloads import DownloadManager, DownloadPolicy, DownloadResult, _blocking
 from modmesh.core.identity import IdentityRegistry
 from modmesh.core.installation import InstallationManager
+from modmesh.core.pack_io import resolve_pack, validate_context
+from modmesh.core.packs import PackManifest
 from modmesh.core.planning import InstallationPlan, InstallInput
 from modmesh.core.resolver import DependencyResolution, ResolvedMod
 from modmesh.core.sources import SourceRegistry
-from modmesh.domain.models import GameInstallation
+from modmesh.domain.models import GameInstallation, SourceRef
 from modmesh.storage.metadata import MetadataStore
 
 
@@ -43,6 +45,7 @@ async def prepare_resolution(
     resolution: DependencyResolution,
     *,
     rule: str | None = None,
+    recipes: Mapping[SourceRef, tuple[str | None, str]] | None = None,
     prefix: str = "",
     replace_existing: bool = False,
     cancelled: threading.Event | None = None,
@@ -96,9 +99,13 @@ async def prepare_resolution(
 
                     entry = await cache.obtain(mod.file, fetch)
                     path = await cache.export_async(entry, Path(temporary.name) / str(index))
+                    recipe = (recipes or {}).get(mod.project.reference)
                     inputs.append(
                         InstallInput(
-                            mod, path, rule if mod.direct else None, prefix if mod.direct else ""
+                            mod,
+                            path,
+                            recipe[0] if recipe else (rule if mod.direct else None),
+                            recipe[1] if recipe else (prefix if mod.direct else ""),
                         )
                     )
         if progress is not None:
@@ -118,3 +125,44 @@ async def prepare_resolution(
     except BaseException:
         temporary.cleanup()
         raise
+
+
+async def prepare_pack(
+    settings: ClientSettings,
+    registry: SourceRegistry,
+    installation: GameInstallation,
+    manifest: PackManifest,
+    *,
+    cancelled: threading.Event | None = None,
+    progress: Callable[[object], None] | None = None,
+) -> PreparedInstallation:
+    validate_context(manifest, installation)
+    with MetadataStore(settings.paths.database) as store:
+        resolution = await resolve_pack(
+            manifest,
+            registry,
+            identities=IdentityRegistry(store),
+            priorities=source_priorities(settings.source_priorities),
+        )
+    if not resolution.mods:
+        raise ModMeshError(ErrorCode.VALIDATION, "Empty manifest has no installation changes")
+    prepared = await prepare_resolution(
+        settings,
+        registry,
+        installation,
+        resolution,
+        recipes={
+            entry.mod.project.reference: (entry.rule_id, entry.prefix) for entry in manifest.entries
+        },
+        cancelled=cancelled,
+        progress=progress,
+    )
+    installed = prepared.manager.installed()
+    selected = {mod.project.reference for mod in resolution.mods}
+    if any(item.mod.project.reference not in selected for item in installed):
+        prepared.close()
+        raise ModMeshError(
+            ErrorCode.CONFLICT, "Select an empty profile before importing a different mod set"
+        )
+    prepared.source_notes += manifest.warnings
+    return prepared
