@@ -512,7 +512,7 @@ def temporary_installation(root: Path):
     registry.register(adapter)
     game = adapter.inspect(root, Platform.WINDOWS)
     assert game is not None
-    source = root.parent / "install-package.zip"
+    source = root.parent / (root.name + "-install-package.zip")
     with zipfile.ZipFile(source, "w") as archive:
         archive.writestr("One.pak", b"new one")
         archive.writestr("Two.pak", b"new two")

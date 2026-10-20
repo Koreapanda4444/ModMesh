@@ -10,7 +10,7 @@ from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import Connection, create_engine, event, text
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.storage.metadata import _configure_sqlite
@@ -73,7 +73,13 @@ class Database:
     def transaction(self) -> Iterator[Connection]:
         try:
             with self.engine.begin() as connection:
+                if self.backend == "sqlite":
+                    connection.exec_driver_sql("BEGIN IMMEDIATE")
                 yield connection
+        except IntegrityError as exc:
+            raise ModMeshError(
+                ErrorCode.CONFLICT, "Server record conflicts with existing data"
+            ) from exc
         except SQLAlchemyError as exc:
             raise ModMeshError(ErrorCode.STORAGE, "Server database transaction failed") from exc
 

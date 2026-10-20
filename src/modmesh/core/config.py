@@ -97,6 +97,13 @@ class ServerSettings:
     environment: str = "development"
     database_url: str | None = field(default=None, repr=False)
     log_level: str = "INFO"
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = field(default=None, repr=False)
+    smtp_password: str | None = field(default=None, repr=False)
+    smtp_from: str | None = None
+    smtp_tls: bool = True
+    session_seconds: int = 604800
 
     def __post_init__(self) -> None:
         if not self.host or any(c.isspace() for c in self.host):
@@ -124,6 +131,24 @@ class ServerSettings:
             if self.environment == "production" and url.get_backend_name() != "postgresql":
                 raise ConfigurationError("Production server requires PostgreSQL")
         _log_level(self.log_level)
+        if type(self.smtp_port) is not int or not 1 <= self.smtp_port <= 65535:
+            raise ConfigurationError("Invalid SMTP port")
+        if type(self.session_seconds) is not int or not 300 <= self.session_seconds <= 2592000:
+            raise ConfigurationError("Session duration must be 5 minutes to 30 days")
+        if not isinstance(self.smtp_tls, bool):
+            raise ConfigurationError("SMTP TLS must be a boolean")
+        if self.smtp_host is not None and (
+            not self.smtp_host or any(char.isspace() for char in self.smtp_host)
+        ):
+            raise ConfigurationError("Invalid SMTP hostname")
+        if (
+            self.smtp_host
+            and not self.smtp_tls
+            and self.smtp_host not in {"localhost", "127.0.0.1", "::1"}
+        ):
+            raise ConfigurationError("SMTP requires TLS except on loopback")
+        if (self.smtp_username is None) != (self.smtp_password is None):
+            raise ConfigurationError("SMTP username and password must be configured together")
 
 
 def _log_level(value: str) -> str:
@@ -242,7 +267,18 @@ def load_server_settings(
         data = _section(
             path,
             "server",
-            {"host", "port", "environment", "database_url", "log_level"},
+            {
+                "host",
+                "port",
+                "environment",
+                "database_url",
+                "log_level",
+                "smtp_host",
+                "smtp_port",
+                "smtp_from",
+                "smtp_tls",
+                "session_seconds",
+            },
             required=True,
         )
     for key, name in {
@@ -251,6 +287,11 @@ def load_server_settings(
         "environment": "MODMESH_ENV",
         "database_url": "MODMESH_DATABASE_URL",
         "log_level": "MODMESH_LOG_LEVEL",
+        "smtp_host": "MODMESH_SMTP_HOST",
+        "smtp_port": "MODMESH_SMTP_PORT",
+        "smtp_from": "MODMESH_SMTP_FROM",
+        "smtp_tls": "MODMESH_SMTP_TLS",
+        "session_seconds": "MODMESH_SESSION_SECONDS",
     }.items():
         if name in env:
             data[key] = env[name]
@@ -267,4 +308,30 @@ def load_server_settings(
         environment=_string(data, "environment", "development") or "development",
         database_url=_string(data, "database_url", None),
         log_level=_string(data, "log_level", "INFO") or "INFO",
+        smtp_host=_string(data, "smtp_host", None),
+        smtp_from=_string(data, "smtp_from", None),
+        smtp_username=env.get("MODMESH_SMTP_USERNAME"),
+        smtp_password=env.get("MODMESH_SMTP_PASSWORD"),
+        smtp_port=_server_integer(data.get("smtp_port", 587)),
+        smtp_tls=_server_boolean(data.get("smtp_tls", True)),
+        session_seconds=_server_integer(data.get("session_seconds", 604800)),
     )
+
+
+def _server_integer(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        raise ConfigurationError("Server integer option is invalid")
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ConfigurationError("Server integer option is invalid") from exc
+
+
+def _server_boolean(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value in {"true", "1"}:
+        return True
+    if isinstance(value, str) and value in {"false", "0"}:
+        return False
+    raise ConfigurationError("Server boolean option is invalid")

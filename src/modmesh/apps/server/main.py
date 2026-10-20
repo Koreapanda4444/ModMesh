@@ -12,13 +12,19 @@ from tempfile import TemporaryDirectory
 import httpx
 import uvicorn
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.engine import URL
 from starlette.exceptions import HTTPException
+from starlette.middleware.base import RequestResponseEndpoint
+from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from modmesh import __version__
+from modmesh.apps.server.auth import Authentication
+from modmesh.apps.server.auth_routes import router as auth_router
 from modmesh.apps.server.database import Database
+from modmesh.apps.server.mail import Mailer, SMTPMailer
 from modmesh.core.config import ConfigurationError, ServerSettings, load_server_settings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError, configure_logging
 
@@ -60,7 +66,11 @@ class BodyLimit:
         await self.app(scope, limited, send)
 
 
-def create_app(settings: ServerSettings | None = None, database: Database | None = None) -> FastAPI:
+def create_app(
+    settings: ServerSettings | None = None,
+    database: Database | None = None,
+    mailer: Mailer | None = None,
+) -> FastAPI:
     settings = settings or load_server_settings()
     owned = database is None and settings.database_url is not None
     database = database or (Database(settings.database_url) if settings.database_url else None)
@@ -83,6 +93,31 @@ def create_app(settings: ServerSettings | None = None, database: Database | None
     app.add_middleware(BodyLimit)
     app.state.database = database
     app.state.settings = settings
+    app.state.authentication = (
+        Authentication(database, settings, mailer or SMTPMailer(settings)) if database else None
+    )
+    app.include_router(auth_router)
+
+    @app.middleware("http")
+    async def no_store(request: Request, call_next: RequestResponseEndpoint) -> Response:
+        response = await call_next(request)
+        if request.url.path.startswith("/v1/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_input(request: Request, error: RequestValidationError) -> JSONResponse:
+        errors = [{"location": item["loc"], "type": item["type"]} for item in error.errors()]
+        return JSONResponse(
+            {
+                "error": {
+                    "code": "validation",
+                    "message": "Invalid request fields",
+                    "fields": errors,
+                }
+            },
+            status_code=422,
+        )
 
     @app.exception_handler(ModMeshError)
     async def application_error(request: Request, error: ModMeshError) -> JSONResponse:
