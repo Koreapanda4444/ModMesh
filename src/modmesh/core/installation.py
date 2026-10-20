@@ -610,6 +610,7 @@ class InstallationManager:
                     for key, file_record in new_files.items():
                         transaction.put("install.files", key, file_record)
                     for mod in plan.resolution.mods:
+                        recipe = next(item for item in plan.inputs if item.mod == mod)
                         reference = mod.project.reference
                         dependencies = tuple(
                             dict.fromkeys(
@@ -632,6 +633,8 @@ class InstallationManager:
                                 "paths": paths,
                                 "dependencies": [asdict(ref) for ref in dependencies],
                                 "operation_id": operation_id,
+                                "rule_id": recipe.rule_id,
+                                "prefix": recipe.prefix,
                             },
                         )
                     record["state"] = "committed"

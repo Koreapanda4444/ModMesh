@@ -160,6 +160,8 @@ class ManagedMod:
     paths: tuple[str, ...]
     dependencies: tuple[SourceRef, ...]
     operation_id: str
+    rule_id: str | None = None
+    prefix: str = ""
 
     @classmethod
     def read(cls, value: object) -> ManagedMod:
@@ -169,4 +171,6 @@ class ManagedMod:
             tuple(string_record(path) for path in array_record(data.get("paths"))),
             tuple(reference_record(ref) for ref in array_record(data.get("dependencies", []))),
             string_record(data.get("operation_id")),
+            optional_string(data.get("rule_id")),
+            str(data.get("prefix", "")),
         )

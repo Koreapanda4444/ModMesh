@@ -105,6 +105,8 @@ def profile_record(profile: Profile) -> dict[str, object]:
                 "paths": item.paths,
                 "dependencies": [asdict(ref) for ref in item.dependencies],
                 "operation_id": item.operation_id,
+                "rule_id": item.rule_id,
+                "prefix": item.prefix,
             }
             for item in profile.mods
         ],

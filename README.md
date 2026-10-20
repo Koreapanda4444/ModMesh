@@ -58,6 +58,8 @@ Minecraft 다중 출처는 선택 인스턴스의 게임 버전·로더로 조�
 
 프로필은 게임 설치별로 저장하며 전환 계획의 fingerprint를 승인해야 실제 파일을 변경합니다. 외부 모드는 프로필 간 공유되고, 사용자 수정·외부 재사용 파일·서로 다른 게임 버전/로더는 자동 전환하지 않습니다. Minecraft `options.txt`는 명시적으로 선택한 경우에만 로컬 프로필에 포함합니다. 세이브와 인증 정보는 수집하지 않습니다. 실제 게임 실행에서의 프로필 로딩은 미검증입니다.
 
+모드팩 Manifest schema 1은 팩 ID·불변 개정 번호·게임/판본/플랫폼/로더 맥락과 정확한 출처·버전·파일 ID, 해시, 의존성, 설치 규칙·압축 prefix를 기록합니다. JSON은 최대 2 MiB·128개 모드이며 중복 키·알 수 없는 필드·경로 탈출을 거부합니다. 다운로드 URL·개인 경로·인증 필드는 포함하지 않습니다. 설정은 경로·해시만 포함하며 실제 설정 내용은 제외합니다. 강한 출처 해시나 의존성 정보가 없으면 재현성 경고를 유지합니다. 기존 설치 중 규칙/prefix가 기록되지 않았던 항목은 Import에서 자동 추측하지 않습니다.
+
 ## 설정
 
 클라이언트는 `--config <TOML>` 또는 `MODMESH_CONFIG`로 설정을 지정합니다. 기본 파일은 `%APPDATA%/ModMesh/config.toml`이며, 없으면 기본값을 사용합니다. `[client]`에는 `data_dir`, `cache_dir`, `cache_max_bytes`, `server_url`, `log_level`과 `source_priorities`를 지정할 수 있습니다. `MODMESH_DATA_DIR`, `MODMESH_CACHE_DIR`, `MODMESH_CACHE_MAX_BYTES`, `MODMESH_SERVER_URL`, `MODMESH_LOG_LEVEL` 환경 변수가 우선합니다.

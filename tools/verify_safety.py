@@ -30,6 +30,7 @@ from modmesh.core.games import GameRegistry
 from modmesh.core.hashing import verify_file
 from modmesh.core.identity import EvidenceKind, IdentityEvidence, IdentityRegistry
 from modmesh.core.installation import InstallationManager
+from modmesh.core.packs import PackContext, PackEntry, PackManifest, PackSetting
 from modmesh.core.planning import InstallationPlanner, InstallInput
 from modmesh.core.priorities import SourcePriorities
 from modmesh.core.processes import java_guard
@@ -697,6 +698,50 @@ def check_shared_dependencies(root: Path) -> None:
     assert not manager.installed() and not (root / "Pal/Content/Paks/~mods/One.pak").exists()
 
 
+def check_manifests(root: Path) -> None:
+    manager, resolution, inputs = temporary_installation(root)
+    entry = PackEntry(resolution.mods[0], "palworld-pak")
+    manifest = PackManifest.create(
+        "Portable",
+        PackContext.from_installation(manager.installation),
+        (entry,),
+        (PackSetting("options.txt", "0" * 64),),
+    )
+    payload = manifest.dumps()
+    restored = PackManifest.loads(payload)
+    assert restored.digest == manifest.digest and restored.entries[0].mod == entry.mod
+    assert "download_url" not in payload.decode() and str(root) not in payload.decode()
+    assert restored.warnings and restored.settings[0].path == "options.txt"
+    for change in (
+        {"schema_version": 2},
+        {"schema_version": True},
+        {"revision": 0},
+        {"api_key": "never allowed"},
+        {"entries": [entry.document(), entry.document()]},
+        {"settings": [{"path": "../secret", "sha256": "0" * 64, "included": False}]},
+        {"settings": [{"path": "options.txt", "sha256": "0" * 64, "included": True}]},
+    ):
+        document = manifest.document() | change
+        try:
+            PackManifest.loads(json.dumps(document).encode())
+        except ModMeshError:
+            pass
+        else:
+            raise AssertionError("Unsafe manifest accepted")
+    for payload in (
+        b'{"name":"a","name":"b"}',
+        b'{"value":NaN}',
+        b"[" * 1200,
+        b" " * (2 * 1024**2 + 1),
+    ):
+        try:
+            PackManifest.loads(payload)
+        except ModMeshError:
+            pass
+        else:
+            raise AssertionError("Unbounded or ambiguous JSON accepted")
+
+
 def profile_setup(root: Path):
     manager, resolution, inputs = temporary_installation(root)
     target = root / "Pal/Content/Paks/~mods/One.pak"
@@ -1014,6 +1059,7 @@ async def main() -> None:
         check_shared_dependencies(Path(name) / "shared")
         check_minecraft(Path(name) / "minecraft")
         check_profiles(Path(name) / "profiles")
+        check_manifests(Path(name) / "manifests")
     print("Download, cache, plan and installation/recovery safety checks passed")
 
 
