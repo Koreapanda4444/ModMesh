@@ -48,6 +48,8 @@ jobs:
         run: python tools/verify_safety.py
       - name: Verify server migrations
         run: python tools/verify_server.py
+      - name: Verify account UI and session isolation
+        run: python tools/verify_accounts.py
 
   server:
     name: PostgreSQL server

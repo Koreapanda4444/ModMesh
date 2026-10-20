@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from modmesh import __version__
+from modmesh.apps.desktop.accounts import AccountPanel
 from modmesh.apps.desktop.details import ModDetails
 from modmesh.apps.desktop.installed import InstalledPanel
 from modmesh.apps.desktop.jobs import JobsPanel
@@ -112,7 +113,8 @@ class MainWindow(QMainWindow):
         self.profile_selector.currentIndexChanged.connect(self._profile_choice)
         header.addWidget(self.profile_selector)
         header.addStretch()
-        header.addWidget(QLabel("게스트 · 로컬 모드 관리"))
+        self.account_label = QLabel("게스트 · 로컬 모드 관리")
+        header.addWidget(self.account_label)
         outer.addLayout(header)
         body = QHBoxLayout()
         self.navigation = QListWidget()
@@ -198,6 +200,10 @@ class MainWindow(QMainWindow):
         )
         self.pages.addWidget(self.packs_panel)
         self.navigation.addItem("모드팩")
+        self.account_panel = AccountPanel(settings, store, self.start_work)
+        self.account_panel.state_changed.connect(self.account_label.setText)
+        self.pages.addWidget(self.account_panel)
+        self.navigation.addItem("계정")
         outer.addLayout(body, 1)
         self.setCentralWidget(content)
         self.navigation.setCurrentRow(0)
