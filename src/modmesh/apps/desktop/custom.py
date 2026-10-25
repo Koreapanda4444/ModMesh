@@ -17,7 +17,9 @@ from PySide6.QtWidgets import (
 from modmesh.adapters.sources.custom import CustomSource
 from modmesh.apps.desktop.search import WorkStarter
 from modmesh.apps.desktop.widgets import fill_row, table
+from modmesh.apps.runtime import create_game_registry
 from modmesh.core.config import ClientSettings
+from modmesh.core.games import GameCapability
 from modmesh.domain.models import GameInstallation
 from modmesh.storage.installed import decode_mod
 
@@ -77,6 +79,13 @@ class CustomPanel(QWidget):
     def set_context(self, installation: GameInstallation | None) -> None:
         self.generation += 1
         self.installation = installation
+        self.register_button.setEnabled(
+            bool(
+                installation
+                and GameCapability.INSTALL_RULES
+                in create_game_registry().get(installation.game_id).capabilities
+            )
+        )
         self.refresh()
 
     def choose(self) -> None:
@@ -119,7 +128,7 @@ class CustomPanel(QWidget):
             self.status.setText(message)
 
     def register(self) -> None:
-        if not self.installation:
+        if not self.installation or not self.register_button.isEnabled():
             return
         installation, generation = self.installation, self.generation
         name, location = self.name.text(), self.location.text()

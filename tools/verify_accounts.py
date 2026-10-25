@@ -14,11 +14,13 @@ from unittest.mock import patch
 import httpx
 from PySide6.QtWidgets import QApplication
 
+from modmesh.adapters.games.ark_evolved import EXECUTABLE, MODS, ArkEvolvedAdapter
 from modmesh.apps.desktop.accounts import AccountPanel
 from modmesh.apps.desktop.custom import CustomPanel
 from modmesh.apps.desktop.packs import PacksPanel
 from modmesh.apps.desktop.publishing import PublishingPanel
 from modmesh.apps.desktop.workers import Worker
+from modmesh.apps.desktop.workshop import WorkshopPanel
 from modmesh.apps.server.database import Database
 from modmesh.apps.server.main import create_app
 from modmesh.core.config import AppPaths, ClientSettings, ServerSettings
@@ -244,6 +246,28 @@ def verify():
             wait()
             assert custom.list.rowCount() == 0 and local.exists()
             custom.close()
+            ark = root / "steam/steamapps/common/ARK"
+            binary = ark / EXECUTABLE
+            binary.parent.mkdir(parents=True)
+            binary.write_bytes(b"MZ")
+            (ark.parent.parent / "appmanifest_346110.acf").write_text(
+                '"AppState" {"appid" "346110" "installdir" "ARK" "buildid" "123"}'
+            )
+            (ark / MODS).mkdir(parents=True)
+            (ark / MODS / "123.mod").write_bytes(b"descriptor")
+            workshop = WorkshopPanel(start)
+            workshop.set_context(ArkEvolvedAdapter().inspect(ark, Platform.WINDOWS))
+            wait()
+            assert workshop.list.rowCount() == 1, workshop.status.text()
+            workshop.list.selectRow(0)
+            with patch(
+                "modmesh.apps.desktop.workshop.QDesktopServices.openUrl", return_value=True
+            ) as opened:
+                workshop.open_selected()
+                assert opened.call_args[0][0].toString().endswith("id=123")
+            workshop.set_context(None)
+            assert workshop.list.rowCount() == 0
+            workshop.close()
             panel.server.setText("http://127.0.0.1")
             panel.select_server()
             wait()

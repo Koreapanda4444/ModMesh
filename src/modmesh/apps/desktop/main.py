@@ -44,6 +44,7 @@ from modmesh.apps.desktop.publishing import PublishingPanel
 from modmesh.apps.desktop.search import SearchPanel
 from modmesh.apps.desktop.widgets import fill_row, table
 from modmesh.apps.desktop.workers import Worker
+from modmesh.apps.desktop.workshop import WorkshopPanel
 from modmesh.apps.runtime import create_game_registry
 from modmesh.core.config import ClientSettings, ConfigurationError, load_client_settings
 from modmesh.core.diagnostics import configure_logging, install_exception_hook
@@ -213,6 +214,9 @@ class MainWindow(QMainWindow):
         self.custom_panel = CustomPanel(settings, self.start_work)
         self.pages.addWidget(self.custom_panel)
         self.navigation.addItem("커스텀 출처")
+        self.workshop_panel = WorkshopPanel(self.start_work)
+        self.pages.addWidget(self.workshop_panel)
+        self.navigation.addItem("Steam Workshop")
         outer.addLayout(body, 1)
         self.setCentralWidget(content)
         self.navigation.setCurrentRow(0)
@@ -380,6 +384,7 @@ class MainWindow(QMainWindow):
         self.profiles_panel.set_context(record.installation if record else None)
         self.packs_panel.set_context(record.installation if record else None)
         self.custom_panel.set_context(record.installation if record else None)
+        self.workshop_panel.set_context(record.installation if record else None)
         if record is None:
             self.game_details.setPlainText(
                 "탐지된 설치 경로가 없습니다. 게임과 OS 지원 범위를 확인하고 폴더를 등록하세요."

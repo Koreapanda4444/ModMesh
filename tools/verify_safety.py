@@ -19,10 +19,18 @@ import modmesh.core.installation as installation_engine
 import modmesh.core.processes as processes_engine
 import modmesh.core.profiles as profile_engine
 import modmesh.core.removal as removal_engine
+from modmesh.adapters.games.ark_evolved import (
+    EXECUTABLE,
+    MODS,
+    SETTINGS,
+    ArkEvolvedAdapter,
+    item_url,
+)
 from modmesh.adapters.games.minecraft import MinecraftAdapter
 from modmesh.adapters.games.minecraft_mods import matches_native, read_jar, validate_native
 from modmesh.adapters.games.palworld import PalworldAdapter
 from modmesh.adapters.sources.custom import CustomSource
+from modmesh.adapters.sources.workshop import WorkshopSource
 from modmesh.apps.operations import prepare_pack, prepare_pack_update, prepare_resolution
 from modmesh.core.alternatives import find_alternatives
 from modmesh.core.artifact_matching import ArtifactCandidate
@@ -47,6 +55,7 @@ from modmesh.core.resolver import DependencyEdge, DependencyResolution, Resolved
 from modmesh.core.sources import (
     DownloadAccess,
     DownloadMode,
+    SearchRequest,
     SourceAdapter,
     SourceCapability,
     SourceDescriptor,
@@ -1248,6 +1257,71 @@ async def check_custom(root: Path) -> None:
     assert inputs[0].path.read_bytes() == original
 
 
+async def check_ark(root: Path) -> None:
+    steam = root / "steam"
+    steamapps = steam / "steamapps"
+    game = steamapps / "common/ARK"
+    binary = game / EXECUTABLE
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"MZ")
+    manifest = steamapps / "appmanifest_346110.acf"
+    manifest.write_text('"AppState" {"appid" "346110" "installdir" "ARK" "buildid" "123"}')
+    mods = game / MODS
+    (mods / "100").mkdir(parents=True)
+    (mods / "100.mod").write_bytes(b"description")
+    (mods / "100/data.pak").write_bytes(b"game content")
+    cached = steamapps / "workshop/content/346110/100"
+    cached.mkdir(parents=True)
+    (cached / "download.pak").write_bytes(b"steam content")
+    acf = steamapps / "workshop/appworkshop_346110.acf"
+    acf.write_text(
+        '"AppWorkshop" { "appid" "346110" "WorkshopItemsInstalled" { '
+        '"100" {"manifest" "1"} "200" {"manifest" "2"} } '
+        '"WorkshopItemDetails" {"100" {"manifest" "3"}} }'
+    )
+    settings = game / SETTINGS
+    settings.parent.mkdir(parents=True)
+    settings.write_text("[ServerSettings]\nActiveMods=100,300\n")
+    save = game / "ShooterGame/Saved/SavedArksLocal/save.ark"
+    save.parent.mkdir(parents=True)
+    save.write_bytes(b"keep save")
+    before = {str(path): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    adapter = ArkEvolvedAdapter()
+    installation = adapter.inspect(game, Platform.WINDOWS)
+    assert installation and installation.version.build_id == "123"
+    assert adapter.inspect(game, Platform.LINUX) is None
+    states = {item.item_id: item for item in adapter.states(installation)}
+    assert set(states) == {"100", "200", "300"}
+    assert states["100"].descriptor_present and states["100"].game_content_present
+    assert states["100"].workshop_content_present and states["100"].manifest_mismatch
+    assert states["200"].steam_install_record and not states["200"].game_content_present
+    assert states["300"].configured_active is True and states["200"].configured_active is False
+    assert all(not file.managed for mod in adapter.scan_mods(installation) for file in mod.files)
+    page = await WorkshopSource().search(SearchRequest("ark-evolved", "test mod"))
+    assert (
+        page.handoff_url.startswith("https://steamcommunity.com/")
+        and "test+mod" in page.handoff_url
+    )
+    assert before == {str(path): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    original = acf.read_text()
+    acf.write_text(original.replace('"346110"', '"2399830"'))
+    try:
+        adapter.states(installation)
+    except ModMeshError as exc:
+        assert exc.code == ErrorCode.VALIDATION
+    else:
+        raise AssertionError("Wrong Workshop application accepted")
+    acf.write_text(original)
+    manifest.write_text(manifest.read_text().replace('"346110"', '"2399830"'))
+    assert adapter.inspect(game, Platform.WINDOWS) is None
+    try:
+        item_url("../escape")
+    except ModMeshError:
+        pass
+    else:
+        raise AssertionError("Invalid Workshop ID accepted")
+
+
 async def main() -> None:
     logging.disable(logging.CRITICAL)
     with TemporaryDirectory(prefix="modmesh-safety-") as name:
@@ -1263,6 +1337,7 @@ async def main() -> None:
         check_manifests(Path(name) / "manifests")
         await check_pack_import(Path(name) / "pack-import")
         await check_custom(Path(name) / "custom")
+        await check_ark(Path(name) / "ark")
     print("Download, cache, plan and installation/recovery safety checks passed")
 
 

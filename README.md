@@ -48,11 +48,12 @@ py -3.12 -m venv .venv
 |---|---|
 | Palworld Windows Steam | 설치 경로·Steam build ID·Pak/UE4SS 모드 탐지. 실제 게임 설치와 모드 로딩은 미검증. |
 | Minecraft Java | 공식 런처·Prism/MultiMC 인스턴스와 Fabric/Forge/NeoForge 로더 탐지. JAR 내부 조건 검사·설치·제거 보호. 실제 게임 로딩은 미검증. |
+| ARK Evolved Windows Steam | Steam 설치·build ID·로컬 모드 상태 탐지와 공식 Workshop 연결. 실제 구독 상태·게임 로딩은 미검증. |
 | Modrinth | Minecraft Java 모드 검색·버전·로더·의존성·파일 조회. 실제 다운로드와 캐시 재사용 검증. |
 | Nexus Mods | 공개 인기 목록과 공식 사이트 인계. 전체 카탈로그 검색에는 제한이 있으며, 인증 상세·다운로드 API는 미검증. |
 | CurseForge | 승인 API 키와 배포 권한을 사용하는 Minecraft Java 모드 연동. 승인 계정 API·실다운로드는 미검증. |
 
-Minecraft는 확인된 단일 로더와 게임 버전이 있는 클라이언트 인스턴스의 JAR만 `mods`에 설치합니다. 로더 설치·런처 실행·설정/세이브 수정은 수행하지 않습니다. Fabric의 확장 SemVer·시험판·와일드카드와 숫자형 Maven 범위를 검사하며 해석할 수 없는 필수 조건은 차단합니다. 여러 JAR에 포함된 Fabric 공용 모드는 내장 JAR의 SHA-256과 메타데이터까지 같을 때 한 번 검증합니다. 서로 다른 내장 후보의 로더 선택은 미검증으로 차단합니다. 선택한 런처의 Java 런타임과 일부 NeoForge FML 언어 로더 범위는 경고로 미검증 표시합니다. ARK 어댑터는 아직 구현하지 않았습니다. 실제 Modrinth 다운로드 검증은 실행 환경의 OS DNS 제한으로 공개 DoH 응답을 주입해 수행했으며, 제품 기본 경로는 OS DNS입니다.
+Minecraft는 확인된 단일 로더와 게임 버전이 있는 클라이언트 인스턴스의 JAR만 `mods`에 설치합니다. 로더 설치·런처 실행·설정/세이브 수정은 수행하지 않습니다. Fabric의 확장 SemVer·시험판·와일드카드와 숫자형 Maven 범위를 검사하며 해석할 수 없는 필수 조건은 차단합니다. 여러 JAR에 포함된 Fabric 공용 모드는 내장 JAR의 SHA-256과 메타데이터까지 같을 때 한 번 검증합니다. 서로 다른 내장 후보의 로더 선택은 미검증으로 차단합니다. 선택한 런처의 Java 런타임과 일부 NeoForge FML 언어 로더 범위는 경고로 미검증 표시합니다. 실제 Modrinth 다운로드 검증은 실행 환경의 OS DNS 제한으로 공개 DoH 응답을 주입해 수행했으며, 제품 기본 경로는 OS DNS입니다.
 
 Minecraft 다중 출처는 선택 인스턴스의 게임 버전·로더로 조회하고 설치 계획에서 다시 검증합니다. 상세 화면에서 정확한 프로젝트 ID로 출처 연결을 검토·해제할 수 있습니다. 연결만으로 파일을 같은 것으로 취급하지 않으며, 확인된 호환 맥락과 SHA-256/SHA-512 일치가 있을 때만 허용된 출처로 대체 다운로드합니다. API 키·배포 권한이 없거나 약한 해시만 제공되면 해당 대체 후보를 사용할 수 없다고 표시합니다.
 
@@ -77,6 +78,8 @@ Minecraft 다중 출처는 선택 인스턴스의 게임 버전·로더로 조�
 메일은 `MODMESH_SMTP_HOST`, `MODMESH_SMTP_PORT`, `MODMESH_SMTP_FROM`, `MODMESH_SMTP_USERNAME`, `MODMESH_SMTP_PASSWORD`, `MODMESH_SMTP_TLS`로 설정합니다. 사용자명·비밀번호는 환경 변수로만 받습니다. 기본은 STARTTLS이며 TLS를 끌 수 있는 대상은 loopback뿐입니다. 메일 미설정 시 가입·코드 발급은 사용 불가로 반환합니다. SMTP 프로토콜과 전체 계정 흐름은 로컬 수신기에서 검증하며, 실제 외부 메일 배달은 별도 SMTP 계정으로 확인해야 합니다. `MODMESH_SESSION_SECONDS`는 5분~30일 범위이며 기본은 7일입니다.
 
 ## 개발 검증
+
+ARK: Survival Evolved는 `ark-evolved`로 Windows Steam판을 탐지합니다. Steam app ID 346110과 설치 Manifest·실행 파일을 대조하며 Ascended와 다른 판본은 지원하지 않습니다. Steam Workshop 화면에서 `.mod`·게임 모드 폴더·Steam 다운로드 폴더·설치 기록·ActiveMods 설정을 구분해 조회하고 공식 Workshop 구독 페이지를 엽니다. 로컬 기록은 계정의 현재 구독 여부를 보장하지 않으므로 구독·업데이트·제거는 Steam에서 확인합니다. Steam 소유 파일과 설정·세이브는 읽기 전용이며 Workshop 파일 직접 다운로드·복사 설치·프로필 전환은 제공하지 않습니다. 실제 ARK 실행과 계정 구독 상태 확인은 실게임 환경에서 추가 검증해야 합니다.
 
 커스텀 출처 화면에서 권한 있는 로컬 파일 또는 공개 HTTPS 파일을 현재 게임·버전·로더에 등록할 수 있습니다. HTTPS에는 파일명과 SHA-256이 필수이며 인증정보·쿼리 문자열·사설 주소는 받지 않습니다. 모드 탐색에서 `custom` 출처로 검색한 뒤 기존 설치 규칙·계획·승인을 사용합니다. 등록 삭제는 목록에서만 제거하며 원본과 설치 파일을 지우지 않습니다. 로컬 파일은 등록 시 해시를 계산하고 복사 시 다시 확인합니다. 경로·URL은 Manifest에 넣지 않으며 다른 PC는 같은 게임·해시의 사용 가능한 출처를 다시 등록해야 합니다. 의존성 미확인은 표시하며, 임의 설치 스크립트를 실행하지 않습니다.
 

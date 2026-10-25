@@ -3,12 +3,14 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from modmesh.adapters.games.ark_evolved import ArkEvolvedAdapter
 from modmesh.adapters.games.minecraft import MinecraftAdapter
 from modmesh.adapters.games.palworld import PalworldAdapter
 from modmesh.adapters.sources.curseforge import CurseForgeSource
 from modmesh.adapters.sources.custom import CustomSource
 from modmesh.adapters.sources.modrinth import ModrinthSource
 from modmesh.adapters.sources.nexus import NexusSource
+from modmesh.adapters.sources.workshop import WorkshopSource
 from modmesh.core.config import load_client_settings
 from modmesh.core.diagnostics import ModMeshError
 from modmesh.core.games import GameRegistry
@@ -17,6 +19,7 @@ from modmesh.core.priorities import SourcePriorities
 from modmesh.core.sources import SourceAdapter, SourceDescriptor, SourceRegistry, UnavailableSource
 
 DEFAULT_SOURCE_PRIORITIES = {
+    "ark-evolved": ("workshop",),
     "minecraft": ("modrinth", "curseforge", "nexus", "custom"),
     "palworld": ("nexus", "custom"),
 }
@@ -47,6 +50,7 @@ def create_game_registry() -> GameRegistry:
     registry = GameRegistry()
     registry.register(PalworldAdapter())
     registry.register(MinecraftAdapter())
+    registry.register(ArkEvolvedAdapter())
     return registry
 
 
@@ -69,6 +73,7 @@ async def source_registry(
         registry.register(source)
 
     try:
+        registry.register(WorkshopSource())
         registry.register(
             CustomSource(database or load_client_settings(env=environment).paths.database)
         )
