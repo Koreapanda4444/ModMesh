@@ -15,15 +15,18 @@ import httpx
 from PySide6.QtWidgets import QApplication
 
 from modmesh.apps.desktop.accounts import AccountPanel
+from modmesh.apps.desktop.packs import PacksPanel
 from modmesh.apps.desktop.publishing import PublishingPanel
 from modmesh.apps.desktop.workers import Worker
 from modmesh.apps.server.database import Database
 from modmesh.apps.server.main import create_app
 from modmesh.core.config import AppPaths, ClientSettings, ServerSettings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError, redact_text
+from modmesh.core.games import GameRegistry
 from modmesh.core.packs import PackContext, PackManifest
 from modmesh.domain.models import Platform
 from modmesh.remote.accounts import AccountClient
+from modmesh.remote.sync import RemotePacks
 from modmesh.storage.metadata import MetadataStore
 
 
@@ -188,6 +191,33 @@ def verify():
             wait()
             assert online.share_code.text().startswith("MM-"), online.status.text()
             assert online.share_list.count() == 1
+            code = online.share_code.text()
+            guest = factory("http://localhost")
+            remote = RemotePacks(guest, store)
+            snapshot = remote.fetch(code)
+            assert snapshot.manifest.digest == newer.digest
+            remote.applied("installation:profile", snapshot)
+            assert remote.receipt("installation:profile").digest == newer.digest
+            assert (
+                RemotePacks(factory("http://127.0.0.1"), store).receipt("installation:profile")
+                is None
+            )
+            assert remote.fetch(code, previous=newer).diff.added == ()
+            try:
+                remote.fetch(code, previous=replace(newer, revision=3))
+            except ModMeshError as exc:
+                assert exc.code == ErrorCode.CONFLICT
+            else:
+                raise AssertionError("Remote rollback was accepted")
+            importer = PacksPanel(settings, GameRegistry(), start, lambda: None)
+            importer.bind_accounts(panel)
+            importer.remote_code.setText(code)
+            importer.fetch_remote()
+            wait()
+            assert importer.manifest.digest == newer.digest
+            importer.server_changed("other server")
+            assert importer.manifest is None and importer.prepared is None
+            importer.close()
             online.revoke_share()
             wait()
             assert "True" in online.share_list.currentText()

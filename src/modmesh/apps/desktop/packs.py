@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from modmesh.apps.desktop.accounts import AccountPanel
 from modmesh.apps.desktop.details import PlanDialog
 from modmesh.apps.desktop.profiles import ProfileDialog
 from modmesh.apps.desktop.search import WorkStarter
@@ -38,6 +39,8 @@ from modmesh.core.pack_versions import PackDiff, diff_manifests
 from modmesh.core.packs import PackManifest
 from modmesh.core.profiles import ProfileManager
 from modmesh.domain.models import GameInstallation
+from modmesh.remote.sync import RemotePacks, RemoteSnapshot
+from modmesh.storage.metadata import MetadataStore
 
 
 class PacksPanel(QWidget):
@@ -57,6 +60,8 @@ class PacksPanel(QWidget):
         self.dialog: PlanDialog | ProfileDialog | None = None
         self.prepared_update: PreparedPackUpdate | None = None
         self.applying = False
+        self.accounts: AccountPanel | None = None
+        self.remote_snapshot: RemoteSnapshot | None = None
         layout = QVBoxLayout(self)
         title = QLabel("모드팩")
         title.setObjectName("heading")
@@ -88,6 +93,18 @@ class PacksPanel(QWidget):
         self.read_button.clicked.connect(self.read)
         import_row.addWidget(self.read_button)
         layout.addLayout(import_row)
+        remote_row = QHBoxLayout()
+        self.remote_code = QLineEdit()
+        self.remote_code.setPlaceholderText("선택 서버의 공유 코드 · 비공개 코드는 매번 입력")
+        self.remote_code.textChanged.connect(self.invalidate)
+        remote_row.addWidget(self.remote_code, 1)
+        remote_fetch = QPushButton("공유 코드 Import")
+        remote_fetch.clicked.connect(self.fetch_remote)
+        remote_row.addWidget(remote_fetch)
+        remote_check = QPushButton("적용한 원격 팩 업데이트 확인")
+        remote_check.clicked.connect(lambda: self.fetch_remote(True))
+        remote_row.addWidget(remote_check)
+        layout.addLayout(remote_row)
         self.preview = QTextEdit()
         self.preview.setReadOnly(True)
         layout.addWidget(self.preview, 1)
@@ -113,8 +130,55 @@ class PacksPanel(QWidget):
     def invalidate(self) -> None:
         self.generation += 1
         self.manifest = None
+        self.remote_snapshot = None
         self.install.setEnabled(False)
         self.clear_plan()
+
+    def bind_accounts(self, accounts: AccountPanel) -> None:
+        self.accounts = accounts
+        accounts.state_changed.connect(self.server_changed)
+
+    def server_changed(self, label: str) -> None:
+        self.invalidate()
+
+    def remote_key(self) -> str:
+        assert self.installation is not None
+        profile = ProfileManager(self.games, self.installation).active_id() or "default"
+        return self.installation.installation_id + ":" + profile
+
+    def fetch_remote(self, check: bool = False) -> None:
+        if self.applying or not self.accounts or not self.accounts.client:
+            self.status.setText(
+                "계정 화면에서 서버를 선택하세요. 공개 코드는 게스트도 사용할 수 있습니다."
+            )
+            return
+        self.clear_plan()
+        self.generation += 1
+        generation, client = self.generation, self.accounts.client
+        code, authenticated = self.remote_code.text().strip(), self.accounts.account is not None
+        local_key = self.remote_key() if self.installation else None
+
+        def work(cancelled: threading.Event) -> RemoteSnapshot:
+            with MetadataStore(self.settings.paths.database) as store:
+                remote = RemotePacks(client, store)
+                previous = remote.receipt(local_key) if check and local_key else None
+                if check and previous is None:
+                    raise ValueError("No remote pack is recorded for the selected profile")
+                return remote.fetch(code, previous=previous, authenticated=authenticated)
+
+        def loaded(value: object) -> None:
+            if generation != self.generation:
+                return
+            assert isinstance(value, RemoteSnapshot)
+            self.loaded(generation, value.manifest)
+            self.remote_snapshot = value
+            if value.diff:
+                self.preview.setPlainText(
+                    json.dumps(asdict(value.diff), ensure_ascii=False, indent=2)
+                )
+            self.status.setText("원격 Manifest 확인 완료 · 변경 계획을 검토하고 승인하세요.")
+
+        self.start(work, loaded, partial(self.failed, generation), name="원격 팩 조회")
 
     def clear_plan(self) -> None:
         self.prepared_update = None
@@ -201,6 +265,7 @@ class PacksPanel(QWidget):
         if generation != self.generation:
             return
         assert isinstance(value, PackManifest)
+        self.remote_snapshot = None
         self.manifest = value
         self.preview.setPlainText(json.dumps(value.document(), ensure_ascii=False, indent=2))
         self.install.setEnabled(self.installation is not None and not self.applying)
@@ -280,6 +345,20 @@ class PacksPanel(QWidget):
         self.applying = False
         self.changed()
         if generation == self.generation:
+            if (
+                self.remote_snapshot
+                and self.accounts
+                and self.accounts.client
+                and self.installation
+            ):
+                try:
+                    with MetadataStore(self.settings.paths.database) as store:
+                        RemotePacks(self.accounts.client, store).applied(
+                            self.remote_key(), self.remote_snapshot
+                        )
+                except Exception:
+                    self.status.setText("파일 적용 완료 · 원격 연결 기록 저장에 실패했습니다.")
+                    return
             self.status.setText("모드팩 설치 적용 완료 · 실제 게임 로딩은 별도 확인이 필요합니다.")
             self.install.setEnabled(self.manifest is not None)
 

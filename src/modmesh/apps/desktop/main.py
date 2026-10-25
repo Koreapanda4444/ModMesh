@@ -202,6 +202,7 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(self.packs_panel)
         self.navigation.addItem("모드팩")
         self.account_panel = AccountPanel(settings, store, self.start_work)
+        self.packs_panel.bind_accounts(self.account_panel)
         self.account_panel.state_changed.connect(self.account_label.setText)
         self.pages.addWidget(self.account_panel)
         self.navigation.addItem("계정")
