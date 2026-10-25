@@ -216,7 +216,7 @@ class SearchPanel(QWidget):
         self.status.setPlainText("출처를 조회하고 있습니다…")
 
         async def execute() -> SearchOutput:
-            async with source_registry() as registry:
+            async with source_registry(database=self.settings.paths.database) as registry:
                 result = await UnifiedSearch(
                     registry, priorities=source_priorities(self.settings.source_priorities)
                 ).search(request, source_ids=sources, offsets=offsets)

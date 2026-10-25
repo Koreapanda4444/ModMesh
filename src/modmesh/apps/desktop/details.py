@@ -246,7 +246,7 @@ class ModDetails(QWidget):
         self.status.setText("버전과 의존성 정보를 조회하고 있습니다…")
 
         async def execute() -> ProjectDetails:
-            async with source_registry() as registry:
+            async with source_registry(database=self.settings.paths.database) as registry:
                 source = registry.get(project.reference.source_id)
                 detailed = await source.project(project.game_id, project.reference.project_id)
                 query = (
@@ -373,7 +373,7 @@ class ModDetails(QWidget):
         generation = self.generation
 
         async def execute() -> SourceProject:
-            async with source_registry() as registry:
+            async with source_registry(database=self.settings.paths.database) as registry:
                 candidate = await registry.get(source_id).project(project.game_id, target)
                 if (
                     candidate.game_id != project.game_id
@@ -450,7 +450,7 @@ class ModDetails(QWidget):
 
         def work(cancelled: threading.Event) -> PreparedInstallation:
             async def execute() -> PreparedInstallation:
-                async with source_registry() as registry:
+                async with source_registry(database=self.settings.paths.database) as registry:
                     with MetadataStore(self.settings.paths.database) as store:
                         resolution = await DependencyResolver(
                             registry,

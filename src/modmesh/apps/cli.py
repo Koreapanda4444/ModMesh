@@ -10,8 +10,8 @@ from pathlib import Path
 
 from modmesh.apps.operations import prepare_resolution
 from modmesh.apps.runtime import (
-    DOWNLOAD_DOMAINS,
     create_game_registry,
+    download_domains,
     source_priorities,
     source_registry,
 )
@@ -30,6 +30,7 @@ from modmesh.core.downloads import (
 )
 from modmesh.core.games import DiscoveryContext
 from modmesh.core.identity import IdentityRegistry
+from modmesh.core.local_files import copy_local
 from modmesh.core.matching import ProjectMatcher
 from modmesh.core.removal import RemovalManager
 from modmesh.core.resolver import DependencyResolution, DependencyResolver, ResolvedMod
@@ -208,7 +209,7 @@ async def _search(args: argparse.Namespace, settings: ClientSettings) -> int:
         args.limit,
         SearchSort(args.sort),
     )
-    async with source_registry() as registry:
+    async with source_registry(database=settings.paths.database) as registry:
         result = await UnifiedSearch(
             registry, priorities=source_priorities(settings.source_priorities)
         ).search(request, source_ids=args.source)
@@ -251,7 +252,7 @@ async def _source_files(args: argparse.Namespace, settings: ClientSettings) -> i
                 ErrorCode.CONFLICT, "Requested context differs from the detected game"
             )
         args.game_version, args.loader = actual_version, actual_loader
-    async with source_registry() as registry:
+    async with source_registry(database=settings.paths.database) as registry:
         source = registry.get(args.source)
         project = await source.project(args.game, args.project)
         query = (
@@ -329,11 +330,25 @@ async def _source_files(args: argparse.Namespace, settings: ClientSettings) -> i
         requested = ArtifactCandidate(project, version, files[0], args.game_version, args.loader)
         with ArtifactCache(settings.paths.cache_dir, max_bytes=settings.cache_max_bytes) as cache:
             async with DownloadManager(
-                DOWNLOAD_DOMAINS,
+                download_domains(registry),
                 policy=DownloadPolicy(max_bytes=min(8 * 1024**3, settings.cache_max_bytes)),
             ) as manager:
 
                 async def fetch(destination: Path) -> DownloadResult:
+                    local = source.local_file(files[0])
+                    if local is not None:
+                        cancellation = threading.Event()
+                        return await _blocking(
+                            partial(
+                                copy_local,
+                                files[0],
+                                local,
+                                destination,
+                                cancellation,
+                                min(8 * 1024**3, settings.cache_max_bytes),
+                            ),
+                            cancellation,
+                        )
                     return await manager.submit_candidate(
                         requested,
                         (),

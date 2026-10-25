@@ -7,7 +7,7 @@ from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from modmesh.apps.runtime import DOWNLOAD_DOMAINS, create_game_registry, source_priorities
+from modmesh.apps.runtime import create_game_registry, download_domains, source_priorities
 from modmesh.core.alternatives import find_alternatives
 from modmesh.core.artifact_matching import ArtifactCandidate
 from modmesh.core.cache import ArtifactCache
@@ -17,6 +17,7 @@ from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.downloads import DownloadManager, DownloadPolicy, DownloadResult, _blocking
 from modmesh.core.identity import IdentityRegistry
 from modmesh.core.installation import InstallationManager
+from modmesh.core.local_files import copy_local
 from modmesh.core.pack_io import resolve_pack, validate_context
 from modmesh.core.pack_versions import save_version
 from modmesh.core.packs import PackManifest
@@ -67,7 +68,7 @@ async def prepare_resolution(
         source_notes: list[str] = []
         with ArtifactCache(settings.paths.cache_dir, max_bytes=settings.cache_max_bytes) as cache:
             async with DownloadManager(
-                DOWNLOAD_DOMAINS,
+                download_domains(registry),
                 policy=DownloadPolicy(max_bytes=min(8 * 1024**3, settings.cache_max_bytes)),
             ) as downloads:
                 for index, mod in enumerate(resolution.mods):
@@ -75,6 +76,21 @@ async def prepare_resolution(
                     async def fetch(
                         destination: Path, selected: ResolvedMod = mod
                     ) -> DownloadResult:
+                        local = registry.get(selected.file.project.source_id).local_file(
+                            selected.file
+                        )
+                        if local is not None:
+                            return await _blocking(
+                                partial(
+                                    copy_local,
+                                    selected.file,
+                                    local,
+                                    destination,
+                                    cancellation,
+                                    min(8 * 1024**3, settings.cache_max_bytes),
+                                ),
+                                cancellation,
+                            )
                         requested = ArtifactCandidate(
                             selected.project,
                             selected.version,

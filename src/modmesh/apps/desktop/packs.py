@@ -283,7 +283,7 @@ class PacksPanel(QWidget):
 
         def work(cancelled: threading.Event) -> PreparedInstallation:
             async def execute() -> PreparedInstallation:
-                async with source_registry() as registry:
+                async with source_registry(database=self.settings.paths.database) as registry:
                     return await prepare_pack(
                         self.settings,
                         registry,
@@ -389,7 +389,7 @@ class PacksPanel(QWidget):
 
         def work(cancelled: threading.Event) -> PreparedPackUpdate:
             async def execute() -> PreparedPackUpdate:
-                async with source_registry() as registry:
+                async with source_registry(database=self.settings.paths.database) as registry:
                     return await prepare_pack_update(
                         self.settings,
                         registry,

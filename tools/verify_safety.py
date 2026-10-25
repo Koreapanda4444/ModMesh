@@ -7,6 +7,7 @@ import os
 import stat
 import subprocess
 import sys
+import threading
 import zipfile
 from dataclasses import replace
 from pathlib import Path
@@ -21,7 +22,8 @@ import modmesh.core.removal as removal_engine
 from modmesh.adapters.games.minecraft import MinecraftAdapter
 from modmesh.adapters.games.minecraft_mods import matches_native, read_jar, validate_native
 from modmesh.adapters.games.palworld import PalworldAdapter
-from modmesh.apps.operations import prepare_pack, prepare_pack_update
+from modmesh.adapters.sources.custom import CustomSource
+from modmesh.apps.operations import prepare_pack, prepare_pack_update, prepare_resolution
 from modmesh.core.alternatives import find_alternatives
 from modmesh.core.artifact_matching import ArtifactCandidate
 from modmesh.core.cache import ArtifactCache
@@ -32,6 +34,7 @@ from modmesh.core.games import GameRegistry
 from modmesh.core.hashing import verify_file
 from modmesh.core.identity import EvidenceKind, IdentityEvidence, IdentityRegistry
 from modmesh.core.installation import InstallationManager
+from modmesh.core.local_files import copy_local
 from modmesh.core.pack_io import export_profile, read_manifest, resolve_pack, write_manifest
 from modmesh.core.pack_versions import diff_manifests, save_version, versions
 from modmesh.core.packs import PackContext, PackEntry, PackManifest, PackSetting
@@ -1171,6 +1174,80 @@ def check_minecraft(root: Path) -> None:
         processes_engine.psutil.process_iter = iterator
 
 
+async def check_custom(root: Path) -> None:
+    manager, _, inputs = temporary_installation(root / "game")
+    settings = ClientSettings(AppPaths(root / "cfg", root / "data", root / "cache"))
+    source = CustomSource(settings.paths.database)
+    identity = source.register(
+        "palworld", "Custom package", str(inputs[0].path), dependencies_known=True
+    )
+    project = await source.project("palworld", identity)
+    version = (await source.versions("palworld", identity))[0]
+    mod = ResolvedMod(project, version, version.files[0], True)
+    resolution = DependencyResolution("palworld", None, None, (mod,), ())
+    registry = SourceRegistry()
+    registry.register(source)
+    original = inputs[0].path.read_bytes()
+    inputs[0].path.write_bytes(b"changed since registration")
+    try:
+        await prepare_resolution(
+            settings, registry, manager.installation, resolution, rule="palworld-pak"
+        )
+    except ModMeshError as exc:
+        assert exc.code == ErrorCode.INTEGRITY
+    else:
+        raise AssertionError("Modified custom file accepted")
+    inputs[0].path.write_bytes(original)
+    prepared = await prepare_resolution(
+        settings, registry, manager.installation, resolution, rule="palworld-pak"
+    )
+    try:
+        assert prepared.plan.applicable
+        prepared.manager.apply(prepared.plan, prepared.plan.fingerprint)
+        assert (
+            manager.installation.path / "Pal/Content/Paks/~mods/One.pak"
+        ).read_bytes() == b"new one"
+    finally:
+        prepared.close()
+    destination = root / "keep"
+    destination.write_bytes(b"existing")
+    try:
+        copy_local(mod.file, inputs[0].path, destination, threading.Event(), 1024**2)
+    except ModMeshError as exc:
+        assert exc.code == ErrorCode.CONFLICT
+    assert destination.read_bytes() == b"existing"
+    for value in ("https://127.0.0.1/m.pak", "https://example.com/m.pak?token=secret"):
+        try:
+            source.register("palworld", "Remote", value, filename="m.pak", sha256="a" * 64)
+        except ModMeshError:
+            pass
+        else:
+            raise AssertionError("Unsafe custom URL accepted")
+    remote_id = source.register(
+        "palworld",
+        "Remote",
+        "https://files.example/m.pak",
+        filename="m.pak",
+        sha256=hashlib.sha256(b"remote bytes").hexdigest(),
+    )
+    remote = (await source.versions("palworld", remote_id))[0].files[0]
+
+    async def addresses(host, port):
+        return ("8.8.8.8",)
+
+    async with DownloadManager(
+        {"custom": source.download_hosts()},
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, content=b"remote bytes")),
+        resolver=addresses,
+    ) as downloads:
+        result = await downloads.download(
+            remote, await source.resolve_download("palworld", remote), root / "remote.pak"
+        )
+        assert result.path.read_bytes() == b"remote bytes"
+    source.remove(identity)
+    assert inputs[0].path.read_bytes() == original
+
+
 async def main() -> None:
     logging.disable(logging.CRITICAL)
     with TemporaryDirectory(prefix="modmesh-safety-") as name:
@@ -1185,6 +1262,7 @@ async def main() -> None:
         check_profiles(Path(name) / "profiles")
         check_manifests(Path(name) / "manifests")
         await check_pack_import(Path(name) / "pack-import")
+        await check_custom(Path(name) / "custom")
     print("Download, cache, plan and installation/recovery safety checks passed")
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.domain.dependencies import Dependency
@@ -115,6 +116,12 @@ class DownloadAccess:
 
 class SourceAdapter(ABC):
     version_filters = False
+
+    def local_file(self, file: ModFile) -> Path | None:
+        return None
+
+    def download_hosts(self) -> tuple[str, ...]:
+        return ()
 
     @property
     @abstractmethod

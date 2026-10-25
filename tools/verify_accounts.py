@@ -15,6 +15,7 @@ import httpx
 from PySide6.QtWidgets import QApplication
 
 from modmesh.apps.desktop.accounts import AccountPanel
+from modmesh.apps.desktop.custom import CustomPanel
 from modmesh.apps.desktop.packs import PacksPanel
 from modmesh.apps.desktop.publishing import PublishingPanel
 from modmesh.apps.desktop.workers import Worker
@@ -24,7 +25,7 @@ from modmesh.core.config import AppPaths, ClientSettings, ServerSettings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError, redact_text
 from modmesh.core.games import GameRegistry
 from modmesh.core.packs import PackContext, PackManifest
-from modmesh.domain.models import Platform
+from modmesh.domain.models import GameInstallation, Platform
 from modmesh.remote.accounts import AccountClient
 from modmesh.remote.sync import RemotePacks
 from modmesh.storage.metadata import MetadataStore
@@ -226,6 +227,23 @@ def verify():
             assert panel.account is None
             assert not online.records and not online.preview.toPlainText()
             online.close()
+            custom = CustomPanel(settings, start)
+            custom.set_context(
+                GameInstallation("palworld", root / "game", "steam", Platform.WINDOWS)
+            )
+            wait()
+            local = root / "custom.pak"
+            local.write_bytes(b"registered custom file")
+            custom.name.setText("Custom UI")
+            custom.location.setText(str(local))
+            custom.register()
+            wait()
+            assert custom.list.rowCount() == 1, custom.status.text()
+            custom.list.selectRow(0)
+            custom.remove()
+            wait()
+            assert custom.list.rowCount() == 0 and local.exists()
+            custom.close()
             panel.server.setText("http://127.0.0.1")
             panel.select_server()
             wait()

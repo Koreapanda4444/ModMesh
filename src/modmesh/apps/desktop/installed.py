@@ -271,7 +271,7 @@ class InstalledPanel(QWidget):
         self.status.setText("출처별 버전을 확인하고 있습니다…")
 
         async def execute() -> tuple[UpdateCheck, ...]:
-            async with source_registry() as registry:
+            async with source_registry(database=self.settings.paths.database) as registry:
                 return await check_updates(
                     registry,
                     mods,
