@@ -9,7 +9,7 @@ from pathlib import Path
 from types import MappingProxyType
 from urllib.parse import urlsplit, urlunsplit
 
-from modmesh.core.diagnostics import ErrorCode, ModMeshError
+from modmesh.core.diagnostics import ErrorCode, ModMeshError, register_secret
 from modmesh.domain.validation import require_id
 
 
@@ -257,6 +257,26 @@ def _source_priorities(value: object) -> dict[str, tuple[str, ...]]:
     return result
 
 
+def _secret(env: Mapping[str, str], name: str) -> str | None:
+    value, filename = env.get(name) or None, env.get(name + "_FILE") or None
+    if value and filename:
+        raise ConfigurationError("Choose an environment secret or a secret file, not both")
+    if filename:
+        try:
+            with Path(filename).open("rb") as stream:
+                payload = stream.read(4097)
+            if len(payload) > 4096:
+                raise ValueError("Secret exceeds size limit")
+            value = payload.decode("utf-8").rstrip("\r\n")
+        except (OSError, ValueError) as exc:
+            raise ConfigurationError("Cannot read the configured secret file") from exc
+        if not value or "\x00" in value:
+            raise ConfigurationError("Invalid secret file contents")
+    if value:
+        register_secret(value)
+    return value
+
+
 def load_server_settings(
     path: Path | None = None, *, env: Mapping[str, str] | None = None
 ) -> ServerSettings:
@@ -302,16 +322,30 @@ def load_server_settings(
         port = int(port)
     except ValueError:
         raise ConfigurationError("Server port must be an integer") from None
+    database_url = _string(data, "database_url", None)
+    if password := _secret(env, "MODMESH_DATABASE_PASSWORD"):
+        from sqlalchemy.engine import make_url
+        from sqlalchemy.exc import ArgumentError
+
+        try:
+            url = make_url(database_url or "")
+            if url.get_backend_name() != "postgresql" or url.password is not None:
+                raise ConfigurationError(
+                    "Secret-file database URL needs PostgreSQL without a password"
+                )
+            database_url = url.set(password=password).render_as_string(hide_password=False)
+        except ArgumentError as exc:
+            raise ConfigurationError("Invalid database URL") from exc
     return ServerSettings(
         host=_string(data, "host", "127.0.0.1") or "127.0.0.1",
         port=port,
         environment=_string(data, "environment", "development") or "development",
-        database_url=_string(data, "database_url", None),
+        database_url=database_url,
         log_level=_string(data, "log_level", "INFO") or "INFO",
-        smtp_host=_string(data, "smtp_host", None),
-        smtp_from=_string(data, "smtp_from", None),
-        smtp_username=env.get("MODMESH_SMTP_USERNAME"),
-        smtp_password=env.get("MODMESH_SMTP_PASSWORD"),
+        smtp_host=_string(data, "smtp_host", None) or None,
+        smtp_from=_string(data, "smtp_from", None) or None,
+        smtp_username=env.get("MODMESH_SMTP_USERNAME") or None,
+        smtp_password=_secret(env, "MODMESH_SMTP_PASSWORD"),
         smtp_port=_server_integer(data.get("smtp_port", 587)),
         smtp_tls=_server_boolean(data.get("smtp_tls", True)),
         session_seconds=_server_integer(data.get("session_seconds", 604800)),

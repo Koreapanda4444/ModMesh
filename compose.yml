@@ -1,0 +1,63 @@
+x-server: &server
+  build: .
+  image: modmesh-server:local
+  environment: &environment
+    MODMESH_ENV: production
+    MODMESH_DATABASE_URL: postgresql+psycopg://modmesh@db:5432/modmesh
+    MODMESH_DATABASE_PASSWORD_FILE: /run/secrets/db_password
+    MODMESH_SMTP_HOST: ${MODMESH_SMTP_HOST:-}
+    MODMESH_SMTP_PORT: ${MODMESH_SMTP_PORT:-587}
+    MODMESH_SMTP_FROM: ${MODMESH_SMTP_FROM:-}
+    MODMESH_SMTP_USERNAME: ${MODMESH_SMTP_USERNAME:-}
+    MODMESH_SMTP_PASSWORD: ${MODMESH_SMTP_PASSWORD:-}
+    FORWARDED_ALLOW_IPS: ${MODMESH_TRUSTED_PROXY_IPS:-127.0.0.1}
+  secrets:
+    - db_password
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  read_only: true
+  tmpfs:
+    - /tmp
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: modmesh
+      POSTGRES_DB: modmesh
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U modmesh -d modmesh]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+  migrate:
+    <<: *server
+    command: [--migrate]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+  server:
+    <<: *server
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${MODMESH_SERVER_PORT:-8731}:8731"
+    restart: unless-stopped
+
+volumes:
+  database:
+secrets:
+  db_password:
+    file: ${MODMESH_DB_PASSWORD_FILE:?Set the absolute path of your database password file}
