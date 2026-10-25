@@ -17,6 +17,7 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -79,6 +80,7 @@ class MainWindow(QMainWindow):
         self.closing = False
         self.discovery_done = False
         self.setWindowTitle("ModMesh")
+        self.menuBar().addMenu("도움말").addAction("정보 / 라이선스…", self.show_about)
         self.resize(1240, 780)
         self.setMinimumSize(1000, 620)
         self.setStyleSheet(
@@ -220,9 +222,34 @@ class MainWindow(QMainWindow):
         outer.addLayout(body, 1)
         self.setCentralWidget(content)
         self.navigation.setCurrentRow(0)
-        self.statusBar().showMessage(f"개발판 {__version__} · 파일 변경은 계획 검토 후 적용됩니다.")
+        self.statusBar().showMessage(
+            f"릴리스 후보 {__version__} · 파일 변경은 계획 검토 후 적용됩니다."
+        )
         if auto_discover:
             QTimer.singleShot(0, self.discover)
+
+    def show_about(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("ModMesh 정보 / 라이선스")
+        dialog.resize(720, 520)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel(f"ModMesh {__version__} · Qt {qVersion()}"))
+        text = QTextEdit()
+        text.setReadOnly(True)
+        notices = Path(sys.executable).parent / "THIRD_PARTY_NOTICES.txt"
+        text.setPlainText(
+            notices.read_text(encoding="utf-8")
+            if getattr(sys, "frozen", False) and notices.is_file()
+            else "Qt / PySide6 / shiboken6: LGPL-3.0-only\n"
+            "Copyright The Qt Company Ltd. and other contributors.\n\n"
+            "의존성 라이선스와 소스는 설치한 Python 패키지와 공식 배포처에서 확인하세요.\n"
+            "https://doc.qt.io/qt-6/licensing.html"
+        )
+        layout.addWidget(text)
+        close = QPushButton("닫기")
+        close.clicked.connect(dialog.accept)
+        layout.addWidget(close)
+        dialog.exec()
 
     @property
     def selected_game(self) -> DiscoveryRecord | None:
@@ -455,7 +482,10 @@ def main() -> int:
     parser.add_argument(
         "--check", action="store_true", help="Exercise game discovery and the Qt event loop"
     )
+    parser.add_argument("--check-report", type=Path, help="Write a new JSON check report")
     args = parser.parse_args()
+    if args.check_report is not None and not args.check:
+        parser.error("--check-report requires --check")
     try:
         settings = load_client_settings(args.config)
     except ConfigurationError as exc:
@@ -499,16 +529,21 @@ def main() -> int:
                 "Desktop stopped", extra={"context": {"schema_version": store.schema_version}}
             )
     if args.check:
-        print(
-            json.dumps(
-                {
-                    "application": "desktop",
-                    "version": __version__,
-                    "qt": qVersion(),
-                    "discovery": checked,
-                }
-            )
+        report = json.dumps(
+            {
+                "application": "desktop",
+                "version": __version__,
+                "qt": qVersion(),
+                "platform": app.platformName(),
+                "packaged": bool(getattr(sys, "frozen", False)),
+                "discovery": checked,
+            }
         )
+        if args.check_report is not None:
+            with args.check_report.open("x", encoding="utf-8") as stream:
+                stream.write(report + "\n")
+        if sys.stdout is not None:
+            print(report)
         return 0 if checked else 1
     return result
 

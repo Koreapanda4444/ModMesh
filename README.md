@@ -2,6 +2,8 @@
 
 Python 3.12, PySide6, FastAPI 기반 데스크톱 모드 매니저입니다.
 
+현재 버전은 `0.1.0rc1` 릴리스 후보입니다. Windows x64 포터블 ZIP·사용자별 설치 EXE와 체크섬·의존성 고지·대응 소스는 성공한 [Quality Actions 실행](https://github.com/Koreapanda4444/ModMesh/actions/workflows/ci.yml)의 `ModMesh-windows-x64` Artifacts에서 받습니다. Python 없이 실행하며, 설치·업데이트·제거와 검증 범위는 [Windows 배포 문서](docs/windows.md)를 참고하세요.
+
 현재 CLI에서 게임 탐지, 출처별 검색, 버전 조회, 필수 의존성 버전 해결, 해시 검증 다운로드와 캐시를 사용할 수 있습니다. 데스크톱은 게임 라이브러리·자동/수동 경로 등록·환경 상세와 마지막 게임 복원을 제공합니다. 모드 탐색은 게임·버전·로더·출처·정렬 필터, 출처별 제한 안내와 다음 페이지를 지원합니다. 프로젝트 상세에서 버전·파일·의존성을 조회하고 변경 계획을 검토·승인해 설치할 수 있습니다. 서버는 DB 준비 상태·API 정보와 PostgreSQL/Alembic 마이그레이션을 제공합니다. 모드 설치 전 변경 계획과 승인 적용·백업·중단 복구를 사용할 수 있습니다. 설치된 모드 화면에서 관리/외부 파일·사용자 변경·필수 의존성을 구분하고 다른 호환 버전 조회와 제거 계획을 실행할 수 있습니다. 다운로드/작업 화면은 대기열·전송/적용 진행·취소·조회 재시도·영속 저널과 중단 복구를 제공합니다. 파일 변경 작업은 새 계획 검토 후 다시 적용합니다. 게임별 로컬 프로필 Core는 관리 모드 파일의 구성 저장·복제·전환과 원본 복원·중단 복구를 제공합니다. 프로필 화면에서 생성·복제·이름 변경·삭제와 전환 계획 검토를 사용할 수 있으며, 상단에서 활성 프로필을 선택합니다. 모드팩 화면은 프로필 Manifest Export와 로컬 파일 검증·출처 재확인·설치 계획 Import를 제공합니다. 서버 계정 API는 회원가입·메일 확인·로그인·로그아웃·전체 세션 폐기·비밀번호 복구/변경·이메일 변경과 소유자 검사를 제공합니다. 계정 화면에서 서버 선택·가입·로그인·복구·세션 관리를 사용할 수 있고, 온라인 팩 화면에서 게시·버전·공개 범위를 관리합니다.
 
 ## 설치 및 실행
@@ -15,7 +17,7 @@ py -3.12 -m venv .venv
 .venv\Scripts\modmesh-server
 ```
 
-서버 기본 주소는 `http://127.0.0.1:8731/health`입니다. Windows 독립 실행 패키지와 Linux/macOS 제품 지원은 아직 검증하지 않았습니다.
+서버 기본 주소는 `http://127.0.0.1:8731/health`입니다. Linux/macOS 데스크톱 제품 지원과 실제 게임 로딩은 아직 검증하지 않았습니다.
 
 ## CLI
 
@@ -94,8 +96,8 @@ ARK: Survival Evolved는 `ark-evolved`로 Windows Steam판을 탐지합니다. S
 계정 화면에서 서버 URL 선택, 회원가입·메일 확인·로그인·복구·비밀번호/이메일 변경·세션 폐기를 사용할 수 있습니다. 서버마다 세션을 분리하고 HTTP 리디렉션으로 인증정보를 전달하지 않습니다. 로그인 유지를 선택하면 OS 보안 저장소에 세션을 저장하며, 저장소를 사용할 수 없으면 현재 실행의 메모리에만 유지합니다. 비밀번호는 저장하지 않습니다. 게스트와 서버 연결 실패 상태에서도 로컬 기능을 사용할 수 있습니다. 내 팩 목록은 선택한 서버가 팩 API를 제공할 때 조회합니다.
 
 ```powershell
-.venv\Scripts\python -m ruff check src tools
-.venv\Scripts\python -m ruff format --check src tools
+.venv\Scripts\python -m ruff check src tools packaging
+.venv\Scripts\python -m ruff format --check src tools packaging
 .venv\Scripts\python -m mypy
 .venv\Scripts\python -m pip wheel --no-deps --no-build-isolation -w dist .
 .venv\Scripts\modmesh --check
@@ -104,3 +106,5 @@ ARK: Survival Evolved는 `ark-evolved`로 Windows Steam판을 탐지합니다. S
 ```
 
 화면 없는 환경은 `QT_QPA_PLATFORM=offscreen`을 설정합니다. CI는 Windows·Ubuntu에서 빌드·설치·기본 실행·파일 보호·SQLite 마이그레이션을 검증하고, 별도 PostgreSQL 컨테이너에서 마이그레이션 반복 적용과 API 준비 상태를 검사합니다.
+
+Windows 패키지는 Python 3.12 x64에서 `pip install -c requirements.lock ".[desktop,package]"` 후 `python tools/build_windows.py`로 빌드합니다. Inno Setup 6의 `ISCC.exe`와 Qt 공식 소스 배포처에 대한 네트워크 접근이 필요합니다. 출력 경로는 비어 있어야 합니다. `python tools/verify_windows_package.py`는 Python 검색 경로를 제거한 자식 프로세스에서 포터블·설치형의 네이티브 Qt 화면·탐색·재실행·같은 버전 재설치·제거와 사용자 파일 보존을 검사합니다. Quality의 다른 검사가 모두 성공한 뒤 빌드하며, 패키지 검사까지 통과해야 Artifacts를 업로드합니다. 실제 사용자 PC·게임·외부 인증 API·외부 메일 배달 검증을 대체하지 않습니다.

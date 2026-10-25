@@ -31,9 +31,9 @@ jobs:
       - name: Install pinned dependencies
         run: python -m pip install -c requirements.lock ".[desktop,server,dev]"
       - name: Lint
-        run: python -m ruff check src tools
+        run: python -m ruff check src tools packaging
       - name: Check formatting
-        run: python -m ruff format --check src tools
+        run: python -m ruff format --check src tools packaging
       - name: Type check
         run: python -m mypy
       - name: Build wheel
@@ -96,3 +96,34 @@ jobs:
         run: python -m pip install -c requirements.lock ".[server]"
       - name: Build and verify Docker Compose deployment
         run: python tools/verify_deployment.py --container
+
+  windows_package:
+    name: Windows standalone packages
+    needs: [build, server, container]
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install pinned packaging dependencies
+        run: python -m pip install -c requirements.lock ".[desktop,package]"
+      - name: Build portable and per-user installer with source notices
+        run: python tools/build_windows.py
+      - name: Verify native standalone installation and user file preservation
+        run: python tools/verify_windows_package.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ModMesh-windows-x64
+          path: |
+            dist/windows/*-portable.zip
+            dist/windows/*-setup.exe
+            dist/windows/*-sources.zip
+            dist/windows/SHA256SUMS.txt
+            dist/windows/verification.json
+          if-no-files-found: error
+          retention-days: 30

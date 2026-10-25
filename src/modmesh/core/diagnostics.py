@@ -116,7 +116,9 @@ def configure_logging(*, level: str, directory: Path | None = None) -> logging.L
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
         handler.close()
-    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    handlers: list[logging.Handler] = []
+    if sys.stderr is not None:
+        handlers.append(logging.StreamHandler())
     if directory is not None:
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         handlers.append(

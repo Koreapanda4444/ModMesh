@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "modmesh"
-version = "0.1.0.dev0"
+version = "0.1.0rc1"
 description = "Game-independent desktop mod management"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -14,6 +14,7 @@ dependencies = ["httpx[socks]==0.28.1", "SQLAlchemy==2.1.5", "semantic-version==
 desktop = ["PySide6-Essentials==6.12.0", "keyring==25.7.0"]
 server = ["fastapi==0.143.5", "uvicorn==0.54.0", "alembic==1.20.0", "psycopg[binary]==3.3.6", "argon2-cffi==25.1.0", "email-validator==2.3.0"]
 dev = ["ruff==0.17.1", "mypy==2.4.0", "setuptools==80.9.0", "wheel==0.45.1"]
+package = ["pyinstaller==6.22.3", "pyinstaller-hooks-contrib==2026.9"]
 
 [project.scripts]
 modmesh = "modmesh.apps.desktop.main:main"
