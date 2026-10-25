@@ -49,6 +49,10 @@ def verify(container):
             }
         )
         assert secret.read_text() not in repr(configured)
+        assert (
+            load_server_settings(env={"MODMESH_SMTP_HOST": "", "MODMESH_SMTP_FROM": ""}).smtp_host
+            is None
+        )
         number = port()
         environment = {
             **os.environ,
@@ -79,6 +83,11 @@ def verify(container):
                 )
                 wait_health(number, "postgresql")
                 subprocess.run([*command, "run", "--rm", "migrate"], env=environment, check=True)
+            except subprocess.CalledProcessError:
+                subprocess.run(
+                    [*command, "logs", "--no-color", "--tail=100"], env=environment, check=False
+                )
+                raise
             finally:
                 subprocess.run(
                     [*command, "down", "-v", "--remove-orphans"], env=environment, check=True

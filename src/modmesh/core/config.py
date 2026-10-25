@@ -313,7 +313,7 @@ def load_server_settings(
         "smtp_tls": "MODMESH_SMTP_TLS",
         "session_seconds": "MODMESH_SESSION_SECONDS",
     }.items():
-        if name in env:
+        if name in env and (env[name] or key not in {"smtp_host", "smtp_from"}):
             data[key] = env[name]
     port = data.get("port", 8731)
     if isinstance(port, bool) or not isinstance(port, (str, int)):
