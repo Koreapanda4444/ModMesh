@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSpinBox,
     QSplitter,
     QTextEdit,
     QVBoxLayout,
@@ -85,6 +86,38 @@ class PublishingPanel(QWidget):
         self.preview = QTextEdit()
         self.preview.setReadOnly(True)
         layout.addWidget(self.preview, 1)
+        row = QHBoxLayout()
+        self.share_hours = QSpinBox()
+        self.share_hours.setRange(1, 720)
+        self.share_hours.setValue(168)
+        self.share_hours.setSuffix("시간 후 만료")
+        self.share_uses = QSpinBox()
+        self.share_uses.setRange(0, 1000000)
+        self.share_uses.setSpecialValueText("조회 횟수 무제한")
+        self.share_uses.setSuffix("회 조회")
+        self.share_revision = QSpinBox()
+        self.share_revision.setRange(0, 2**31 - 1)
+        self.share_revision.setSpecialValueText("항상 최신 개정")
+        for control in (self.share_hours, self.share_uses, self.share_revision):
+            row.addWidget(control)
+            self.controls.append(control)
+        self.button(row, "선택 팩 공유 코드 발급", self.issue_share)
+        layout.addLayout(row)
+        self.share_code = QLineEdit()
+        self.share_code.setReadOnly(True)
+        self.share_code.setPlaceholderText(
+            "새 코드는 발급 직후에만 표시됩니다. 복사해서 보관하세요."
+        )
+        layout.addWidget(self.share_code)
+        row = QHBoxLayout()
+        self.share_list = QComboBox()
+        row.addWidget(self.share_list, 1)
+        self.controls.append(self.share_list)
+        self.share_offset: int | None = None
+        self.button(row, "코드 목록", self.load_shares)
+        self.button(row, "다음 코드 페이지", self.next_shares)
+        self.button(row, "선택 코드 회수", self.revoke_share)
+        layout.addLayout(row)
         self.status = QLabel("계정 화면에서 서버를 선택하고 로그인하세요.")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
@@ -108,6 +141,8 @@ class PublishingPanel(QWidget):
         self.list.setRowCount(0)
         self.version_list.setRowCount(0)
         self.preview.clear()
+        self.share_code.clear()
+        self.share_list.clear()
         self.status.setText(label)
         self.list.setEnabled(True)
         self.version_list.setEnabled(True)
@@ -178,11 +213,58 @@ class PublishingPanel(QWidget):
         self.run(lambda client: client.mine(offset), loaded)
 
     def selected(self) -> None:
+        self.share_code.clear()
+        self.share_list.clear()
         if pack := self.selected_pack:
             self.description.setText(str(pack["description"]))
             self.visibility.setCurrentIndex(self.visibility.findData(pack["visibility"]))
             self.archived.setChecked(pack["archived"] is True)
             self.load_versions(0)
+
+    def issue_share(self) -> None:
+        if pack := self.selected_pack:
+            revision = self.share_revision.value() or None
+            seconds, maximum = self.share_hours.value() * 3600, self.share_uses.value() or None
+
+            def issued(value: object) -> None:
+                assert isinstance(value, dict)
+                self.share_code.setText(str(value["code"]))
+                self.load_shares()
+
+            self.run(
+                lambda client: client.issue_share(str(pack["id"]), revision, seconds, maximum),
+                issued,
+            )
+
+    def next_shares(self) -> None:
+        if self.share_offset is not None:
+            self.load_shares(self.share_offset)
+
+    def load_shares(self, offset: int = 0) -> None:
+        if pack := self.selected_pack:
+
+            def loaded(value: object) -> None:
+                assert isinstance(value, dict)
+                self.share_list.clear()
+                following = value.get("next_offset")
+                self.share_offset = following if type(following) is int else None
+                raw = value.get("shares")
+                for item in raw if isinstance(raw, list) else []:
+                    if isinstance(item, dict):
+                        label = (
+                            f"{item['id']} · {item['uses']}/{item['max_uses'] or '∞'}"
+                            f" · 만료 {item['expires_at']} · 회수 {item['revoked']}"
+                        )
+                        self.share_list.addItem(label, item["id"])
+
+            self.run(lambda client: client.shares(str(pack["id"]), offset), loaded)
+
+    def revoke_share(self) -> None:
+        if (pack := self.selected_pack) and (identity := self.share_list.currentData()):
+            self.run(
+                lambda client: client.revoke_share(str(pack["id"]), str(identity)),
+                lambda _: self.load_shares(),
+            )
 
     def load_versions(self, offset: int) -> None:
         pack = self.selected_pack

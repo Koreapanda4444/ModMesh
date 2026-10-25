@@ -177,6 +177,20 @@ def verify():
             online.edit()
             wait()
             assert online.records[0]["description"] == "Updated from desktop"
+            online.list.selectRow(0)
+            wait()
+            online.visibility.setCurrentIndex(online.visibility.findData("unlisted"))
+            online.edit()
+            wait()
+            online.list.selectRow(0)
+            wait()
+            online.issue_share()
+            wait()
+            assert online.share_code.text().startswith("MM-"), online.status.text()
+            assert online.share_list.count() == 1
+            online.revoke_share()
+            wait()
+            assert "True" in online.share_list.currentText()
             panel.logout()
             wait()
             assert panel.account is None

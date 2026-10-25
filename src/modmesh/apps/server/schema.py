@@ -78,3 +78,16 @@ pack_versions = Table(
     Column("digest", String(64), nullable=False),
     Column("created_at", BigInteger, nullable=False),
 )
+share_codes = Table(
+    "share_codes",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("code_hash", String(64), nullable=False, unique=True),
+    Column("pack_id", String(36), ForeignKey("packs.id"), nullable=False, index=True),
+    Column("revision", Integer),
+    Column("expires_at", BigInteger, nullable=False),
+    Column("max_uses", Integer),
+    Column("uses", Integer, nullable=False),
+    Column("revoked", Boolean, nullable=False),
+    Column("created_at", BigInteger, nullable=False),
+)

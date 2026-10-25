@@ -8,7 +8,7 @@ from sqlalchemy.engine import RowMapping
 
 from modmesh.apps.server.auth import Account, require_owner
 from modmesh.apps.server.database import Database
-from modmesh.apps.server.schema import pack_versions, packs, users
+from modmesh.apps.server.schema import pack_versions, packs, share_codes, users
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.packs import PackManifest
 
@@ -170,6 +170,12 @@ class PackService:
         with self.database.transaction() as connection:
             row = self.locked(connection, pack_id)
             require_owner(owner, str(row["owner_id"]))
+            if archived or visibility == "private":
+                connection.execute(
+                    share_codes.update()
+                    .where(share_codes.c.pack_id == pack_id)
+                    .values(revoked=True)
+                )
             connection.execute(
                 packs.update()
                 .where(packs.c.id == pack_id)

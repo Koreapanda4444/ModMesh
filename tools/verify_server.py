@@ -19,7 +19,7 @@ from modmesh.apps.server.auth import Authentication, digest
 from modmesh.apps.server.database import Database
 from modmesh.apps.server.mail import SMTPMailer, normalize_email
 from modmesh.apps.server.main import MAX_REQUEST_BYTES, create_app
-from modmesh.apps.server.schema import auth_tokens, sessions, users
+from modmesh.apps.server.schema import auth_tokens, sessions, share_codes, users
 from modmesh.core.config import ServerSettings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.packs import PackContext, PackManifest
@@ -281,6 +281,53 @@ async def verify_publishing(client, identities):
     return {"manifest": manifest, "newer": newer, "owner": owner, "other": other}
 
 
+async def verify_sharing(client, published, database):
+    owner, other = published["owner"], published["other"]
+    manifest = published["manifest"]
+    path = "/v1/packs/" + manifest.pack_id
+
+    async def call(method, endpoint, body=None, headers=owner, expected=200):
+        response = await client.request(method, endpoint, json=body, headers=headers)
+        assert response.status_code == expected, (endpoint, response.status_code, response.text)
+        return response.json()
+
+    edit = {"visibility": "unlisted", "description": "Shared", "archived": False}
+    await call("PATCH", path, edit)
+    await call("POST", path + "/shares", {}, headers=other, expected=404)
+    issued = await call("POST", path + "/shares", {"revision": 1, "max_uses": 1}, expected=201)
+    code = issued["code"]
+    assert len(code) == 27
+    listing = await call("GET", path + "/shares")
+    assert code not in str(listing) and "code_hash" not in str(listing)
+    raced = await asyncio.gather(
+        *(client.post("/v1/shares/resolve", json={"code": code}) for _ in range(2))
+    )
+    assert sorted(response.status_code for response in raced) == [200, 404]
+    resolved = next(response.json() for response in raced if response.status_code == 200)
+    assert resolved["digest"] == manifest.digest and resolved["manifest"]["revision"] == 1
+    await call("PATCH", path, edit, headers={"authorization": "Bearer " + code}, expected=401)
+    issued = await call("POST", path + "/shares", {}, expected=201)
+    await call("DELETE", path + "/shares/" + issued["id"], headers=other, expected=404)
+    await call("DELETE", path + "/shares/" + issued["id"])
+    await call("POST", "/v1/shares/resolve", {"code": issued["code"]}, headers={}, expected=404)
+    issued = await call("POST", path + "/shares", {}, expected=201)
+    await call("PATCH", path, {**edit, "visibility": "private"})
+    await call("POST", path + "/shares", {}, expected=409)
+    await call("PATCH", path, edit)
+    await call("POST", "/v1/shares/resolve", {"code": issued["code"]}, headers={}, expected=404)
+    issued = await call("POST", path + "/shares", {}, expected=201)
+    with database.transaction() as connection:
+        connection.execute(
+            share_codes.update().where(share_codes.c.id == issued["id"]).values(expires_at=1)
+        )
+    await call("POST", "/v1/shares/resolve", {"code": issued["code"]}, headers={}, expected=404)
+    issued = await call("POST", path + "/shares", {}, expected=201)
+    await call("PATCH", path, {**edit, "archived": True})
+    await call("PATCH", path, edit)
+    await call("POST", "/v1/shares/resolve", {"code": issued["code"]}, headers={}, expected=404)
+    print("Share ownership, pinned revisions, use races, expiry and permanent revocation passed")
+
+
 async def verify(url: str) -> None:
     database = Database(url)
     try:
@@ -306,7 +353,8 @@ async def verify(url: str) -> None:
             )
             assert response.status_code == 413
             identities = await verify_authentication(client, app, database, sink)
-            await verify_publishing(client, identities)
+            published = await verify_publishing(client, identities)
+            await verify_sharing(client, published, database)
         print(f"Server migrations, readiness and body bounds passed: {database.backend}")
     finally:
         database.close()
