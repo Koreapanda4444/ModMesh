@@ -1460,6 +1460,84 @@ def check_rule_discovery(root: Path) -> None:
     assert (game / "Game.exe").read_bytes() == b"fixture; never executed"
 
 
+def check_rule_installation(root: Path) -> None:
+    for kind in ("file", "archive", "mapped"):
+        directory = root / kind
+        game = directory / "Game"
+        game.mkdir(parents=True)
+        (game / "Game.exe").write_bytes(b"game fixture; not executable")
+        (game / "Mods").mkdir()
+        (game / "Mods/user.pak").write_bytes(b"external user file")
+        document = rule_document()
+        document["install_strategies"][0]["kind"] = kind
+        if kind == "mapped":
+            document["install_strategies"][0]["mappings"] = [
+                {"source_prefix": "Package", "target_prefix": "Nested"}
+            ]
+        rule = parse_rule(json.dumps(document))
+        registry = RuleRegistry()
+        entry = registry.register(rule, RuleOrigin.USER, "local.json", approved_digest=rule.digest)
+        adapter = RuleGameAdapter(entry)
+        games = GameRegistry()
+        games.register(adapter)
+        installation = adapter.inspect(game, Platform.WINDOWS)
+        assert installation is not None
+        artifact = directory / ("One.pak" if kind == "file" else "mod.zip")
+        if kind == "file":
+            artifact.write_bytes(b"managed mod")
+        else:
+            with zipfile.ZipFile(artifact, "w") as archive:
+                archive.writestr(
+                    "Package/One.pak" if kind == "mapped" else "One.pak", b"managed mod"
+                )
+        reference = SourceRef("custom", "one")
+        file = ModFile(
+            reference,
+            "one",
+            artifact.name,
+            artifact.stat().st_size,
+            hashes=(verify_file(artifact).sha256,),
+        )
+        version = ModVersion(reference, "1", "1", files=(file,), dependencies_known=True)
+        mod = ResolvedMod(SourceProject(reference, rule.game_id, "One"), version, file, True)
+        resolution = DependencyResolution(rule.game_id, None, None, (mod,), ())
+        manager = RemovalManager(games, installation)
+        plan = manager.plan(resolution, (InstallInput(mod, artifact),))
+        assert plan.applicable, plan.issues
+        assert not (game / "Mods/One.pak").exists()
+        assert manager.apply(plan, plan.fingerprint).state == "committed"
+        expected = game / ("Mods/Nested/One.pak" if kind == "mapped" else "Mods/One.pak")
+        assert expected.read_bytes() == b"managed mod"
+        assert any(
+            item.files[0].path == "Mods/user.pak" for item in adapter.scan_mods(installation)
+        )
+        assert not adapter.validate_profile(installation, (("Game.exe", artifact),), ()).valid
+        removal = manager.plan_removal((reference,))
+        assert removal.applicable, removal.issues
+        assert manager.remove(removal, removal.fingerprint).state == "committed"
+        assert (
+            not expected.exists() and (game / "Mods/user.pak").read_bytes() == b"external user file"
+        )
+        assert (game / "Game.exe").read_bytes() == b"game fixture; not executable"
+        if kind == "mapped":
+            with zipfile.ZipFile(artifact, "w") as archive:
+                archive.writestr("Unmapped/One.pak", b"unmapped")
+            changed_file = replace(
+                file, size=artifact.stat().st_size, hashes=(verify_file(artifact).sha256,)
+            )
+            changed_mod = replace(
+                mod, file=changed_file, version=replace(version, files=(changed_file,))
+            )
+            try:
+                manager.plan(
+                    replace(resolution, mods=(changed_mod,)), (InstallInput(changed_mod, artifact),)
+                )
+            except ModMeshError:
+                pass
+            else:
+                raise AssertionError("Unmapped archive content accepted")
+
+
 def check_legacy_contracts(root: Path) -> None:
     root.mkdir(parents=True)
     game = root / "Palworld"
@@ -1528,6 +1606,7 @@ async def main() -> None:
     with TemporaryDirectory(prefix="modmesh-safety-") as name:
         check_rule_parsing(Path(name) / "rule-parsing")
         check_rule_discovery(Path(name) / "rule-discovery")
+        check_rule_installation(Path(name) / "rule-installation")
         check_legacy_contracts(Path(name) / "legacy-contracts")
         await asyncio.wait_for(check_downloads(Path(name)), timeout=20)
         await asyncio.wait_for(check_linked_downloads(Path(name)), timeout=20)

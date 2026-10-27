@@ -1,27 +1,41 @@
 from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
+from uuid import NAMESPACE_URL, uuid5
 
 from modmesh.adapters.games.steam import read_appmanifest, steam_installations
 from modmesh.core.capabilities import CapabilityEvidence, CapabilitySupport, SupportState
-from modmesh.core.diagnostics import ModMeshError
+from modmesh.core.diagnostics import ErrorCode, ModMeshError
+from modmesh.core.game_rules import InstallStrategyKind
 from modmesh.core.games import (
     DiscoveryContext,
     EnvironmentIssue,
     EnvironmentReport,
     GameAdapter,
     GameCapability,
+    InstallRule,
+    ModLocation,
 )
 from modmesh.core.planning import target_path
 from modmesh.core.processes import executable_guard
 from modmesh.core.rules import RegisteredRule
-from modmesh.domain.models import Game, GameInstallation, GameVersion, Platform
+from modmesh.core.strategies import InstallationStrategyRegistry
+from modmesh.domain.models import (
+    Game,
+    GameInstallation,
+    GameVersion,
+    InstalledFile,
+    InstalledMod,
+    ModFile,
+    Platform,
+)
 
 
 class RuleGameAdapter(GameAdapter):
     def __init__(self, entry: RegisteredRule) -> None:
         self.entry = entry
         self.rule = entry.rule
+        self.strategies = InstallationStrategyRegistry.standard()
         self._game = Game(
             self.rule.game_id, self.rule.name, (self.rule.edition,), frozenset(self.rule.platforms)
         )
@@ -32,7 +46,15 @@ class RuleGameAdapter(GameAdapter):
 
     @property
     def capabilities(self) -> frozenset[GameCapability]:
-        implemented = {GameCapability.DISCOVERY, GameCapability.VERSION}
+        implemented = {
+            GameCapability.DISCOVERY,
+            GameCapability.VERSION,
+            GameCapability.MOD_DISCOVERY,
+            GameCapability.INSTALL_RULES,
+            GameCapability.REMOVAL_RULES,
+            GameCapability.PROFILES,
+            GameCapability.WORKSHOP_HANDOFF,
+        }
         return (
             frozenset(self.rule.capabilities) & implemented if self.entry.approved else frozenset()
         )
@@ -160,3 +182,120 @@ class RuleGameAdapter(GameAdapter):
                 message, state = "규칙 내용을 먼저 승인하세요.", SupportState.BLOCKED
             result.append(replace(report, message=message, state=state, evidence=evidence))
         return tuple(result)
+
+    def mod_locations(self, installation: GameInstallation) -> tuple[ModLocation, ...]:
+        return tuple(
+            ModLocation(root.root_id, target_path(installation.path, root.path), root.layout)
+            for root in self.rule.mod_roots
+        )
+
+    def installation_rules(
+        self, installation: GameInstallation, file: ModFile
+    ) -> tuple[InstallRule, ...]:
+        roots = {root.root_id: root for root in self.rule.mod_roots}
+        return tuple(
+            rule
+            for specification in self.rule.install_strategies
+            for rule in self.strategies.select(
+                specification,
+                roots[specification.root_id],
+                file,
+                loader_present=installation.loader is not None,
+            )
+        )
+
+    def scan_mods(self, installation: GameInstallation) -> tuple[InstalledMod, ...]:
+        if not self.validate(installation).valid:
+            raise ModMeshError(
+                ErrorCode.VALIDATION, "Cannot scan an invalid rule-based installation"
+            )
+        found: list[InstalledMod] = []
+        visited = 0
+        for location in self.mod_locations(installation):
+            if not location.path.is_dir():
+                continue
+            for current, directories, names in location.path.walk(
+                on_error=_scan_error, follow_symlinks=False
+            ):
+                visited += 1
+                if (
+                    visited > 4096
+                    or len(current.relative_to(location.path).parts) > 8
+                    or len(found) + len(names) > 4096
+                ):
+                    raise ModMeshError(ErrorCode.VALIDATION, "Rule mod scan limit reached")
+                directories[:] = sorted(
+                    name
+                    for name in directories
+                    if not (current / name).is_symlink() and not (current / name).is_junction()
+                )
+                for name in sorted(names):
+                    relative = (current / name).relative_to(installation.path).as_posix()
+                    path = target_path(installation.path, relative)
+                    if path.is_file():
+                        identity = str(
+                            uuid5(
+                                NAMESPACE_URL,
+                                f"{installation.installation_id}:{relative.casefold()}",
+                            )
+                        )
+                        found.append(
+                            InstalledMod(
+                                installation.installation_id,
+                                "external:" + identity,
+                                None,
+                                (InstalledFile(relative, False),),
+                                name=name,
+                                kind=location.layout,
+                            )
+                        )
+        return tuple(found)
+
+    def _validate_paths(self, paths: tuple[str, ...]) -> EnvironmentReport:
+        issues = []
+        for path in paths:
+            allowed = any(
+                path.startswith(root.path + "/")
+                and Path(path).suffix.lower() in specification.extensions
+                for root in self.rule.mod_roots
+                for specification in self.rule.install_strategies
+                if root.root_id == specification.root_id
+                and specification.kind != InstallStrategyKind.READONLY
+            )
+            if not allowed:
+                issues.append(
+                    EnvironmentIssue(
+                        "outside_mod_scope",
+                        "Profile/removal path is outside writable rule scope",
+                        True,
+                    )
+                )
+        return EnvironmentReport(tuple(issues))
+
+    def validate_profile_payload(
+        self,
+        installation: GameInstallation,
+        files: tuple[tuple[ModFile, Path], ...],
+        replaced: frozenset[str],
+    ) -> EnvironmentReport:
+        return self.validate_artifacts(installation, files)
+
+    def validate_profile(
+        self,
+        installation: GameInstallation,
+        files: tuple[tuple[str, Path], ...],
+        replaced: tuple[str, ...],
+    ) -> EnvironmentReport:
+        return self._validate_paths(tuple(path for path, _ in files) + replaced)
+
+    def validate_removal(
+        self,
+        installation: GameInstallation,
+        paths: tuple[str, ...],
+        restored: tuple[Path, ...] = (),
+    ) -> EnvironmentReport:
+        return self._validate_paths(paths)
+
+
+def _scan_error(error: OSError) -> None:
+    raise error

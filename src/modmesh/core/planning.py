@@ -503,6 +503,19 @@ class InstallationPlanner:
                         raise ModMeshError(
                             ErrorCode.INTEGRITY, "Archive entry size is inconsistent"
                         )
+                    if rule.mappings:
+                        matches = [
+                            (source, target)
+                            for source, target in rule.mappings
+                            if relative.startswith(source + "/")
+                        ]
+                        if len(matches) != 1:
+                            raise ModMeshError(
+                                ErrorCode.VALIDATION, "Archive file has no unique path mapping"
+                            )
+                        source, target = matches[0]
+                        remainder = relative[len(source) + 1 :]
+                        relative = portable_path(f"{target}/{remainder}" if target else remainder)
                     entries.append((relative, info.filename, digest.hexdigest(), size, None))
         except (OSError, zipfile.BadZipFile, NotImplementedError, RuntimeError) as exc:
             raise ModMeshError(ErrorCode.INTEGRITY, "Cannot safely read this ZIP package") from exc

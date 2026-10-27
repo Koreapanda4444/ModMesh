@@ -58,11 +58,18 @@ class InstallRule:
     layout: str
     extensions: frozenset[str]
     ignored_files: frozenset[str] = frozenset()
+    mappings: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         require_id(self.rule_id, "install rule ID")
         require_text(self.layout, "install layout")
         object.__setattr__(self, "destination", relative_path(self.destination))
+        if self.mappings and self.layout != "archive":
+            raise ModMeshError(ErrorCode.VALIDATION, "Prefix mappings require an archive")
+        for source, target in self.mappings:
+            relative_path(source)
+            if target:
+                relative_path(target)
         if not self.extensions or any(
             ext != "*" and not ext.startswith(".") for ext in self.extensions
         ):
