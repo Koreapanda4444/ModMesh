@@ -171,6 +171,34 @@ class MetadataStore:
         with self._engine.connect() as connection:
             return int(connection.execute(select(_migrations.c.version)).scalar_one())
 
+    def backup(self, destination: Path) -> Path:
+        destination = destination.expanduser().absolute()
+        destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            descriptor = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+        except OSError as exc:
+            raise ModMeshError(ErrorCode.STORAGE, "Backup requires a new writable file") from exc
+        os.close(descriptor)
+        try:
+            with sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True) as source:
+                target = sqlite3.connect(destination)
+                try:
+                    source.backup(target)
+                    if target.execute("PRAGMA integrity_check").fetchone() != ("ok",):
+                        raise ModMeshError(ErrorCode.INTEGRITY, "Metadata backup is inconsistent")
+                finally:
+                    target.close()
+            with destination.open("rb") as stream:
+                os.fsync(stream.fileno())
+        except (OSError, sqlite3.Error, ModMeshError) as exc:
+            destination.unlink(missing_ok=True)
+            if isinstance(exc, ModMeshError):
+                raise
+            raise ModMeshError(
+                ErrorCode.STORAGE, "Cannot create consistent metadata backup"
+            ) from exc
+        return destination
+
     @contextmanager
     def transaction(self, *, write: bool = False) -> Iterator[MetadataTransaction]:
         try:

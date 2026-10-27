@@ -39,6 +39,7 @@ from modmesh.core.search import SearchState, UnifiedSearch
 from modmesh.core.sources import SearchRequest, SearchSort, SourceRegistry, VersionQuery
 from modmesh.domain.models import GameInstallation, ModVersion, SourceRef
 from modmesh.storage.metadata import MetadataStore
+from modmesh.storage.recovery import restore_metadata
 
 
 def main() -> int:
@@ -48,6 +49,12 @@ def main() -> int:
     games_command = commands.add_parser("games", help="Report game capabilities and evidence")
     games_command.add_argument("--game")
     games_command.add_argument("--path", type=Path)
+    metadata_command = commands.add_parser(
+        "metadata", help="Back up or safely restore local metadata"
+    )
+    metadata_command.add_argument("action", choices=("backup", "restore"))
+    metadata_command.add_argument("--output", required=True, type=Path)
+    metadata_command.add_argument("--input", type=Path)
     discover = commands.add_parser("discover", help="Read-only game discovery")
     discover.add_argument("--game", help="Registered game ID")
     discover.add_argument(
@@ -124,6 +131,16 @@ def main() -> int:
     try:
         settings = load_client_settings(args.config)
         configure_logging(level=settings.log_level)
+        if args.command == "metadata":
+            if args.action == "backup":
+                with MetadataStore(settings.paths.database) as store:
+                    output = store.backup(args.output)
+            else:
+                if args.input is None:
+                    raise ModMeshError(ErrorCode.VALIDATION, "Restore requires --input")
+                output = restore_metadata(args.input, args.output)
+            print(json.dumps({"action": args.action, "path": str(output)}, ensure_ascii=False))
+            return 0
         if args.command == "games":
             registry = create_game_registry()
             library = GameLibrary(registry, settings.paths.database)
