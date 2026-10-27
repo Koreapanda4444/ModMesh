@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import zipfile
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -1371,8 +1372,9 @@ def check_legacy_contracts(root: Path) -> None:
         assert Profile.read(store.get("profiles.items", "old-profile")).name == "기존 프로필"
         assert store.get("future.extension", "preserve") == {"unknown": [1, "보존"]}
         assert store.get("discovery.manual", "palworld") is not None
-    with sqlite3.connect(root / "snapshot.sqlite3") as connection:
+    with closing(sqlite3.connect(root / "snapshot.sqlite3")) as connection:
         connection.execute("UPDATE schema_migrations SET version=999")
+        connection.commit()
     try:
         restore_metadata(root / "snapshot.sqlite3", root / "rejected.sqlite3")
     except ModMeshError:

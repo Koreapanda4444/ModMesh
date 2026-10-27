@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
@@ -11,7 +12,7 @@ def restore_metadata(backup: Path, destination: Path) -> Path:
     if backup.is_symlink() or backup.is_junction() or not backup.is_file():
         raise ModMeshError(ErrorCode.VALIDATION, "Select a regular metadata backup")
     try:
-        with sqlite3.connect(backup.as_uri() + "?mode=ro", uri=True) as source:
+        with closing(sqlite3.connect(backup.as_uri() + "?mode=ro", uri=True)) as source:
             versions = sorted(
                 row[0] for row in source.execute("SELECT version FROM schema_migrations")
             )
@@ -33,7 +34,7 @@ def restore_metadata(backup: Path, destination: Path) -> Path:
     descriptor = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
     os.close(descriptor)
     try:
-        with sqlite3.connect(backup.as_uri() + "?mode=ro", uri=True) as source:
+        with closing(sqlite3.connect(backup.as_uri() + "?mode=ro", uri=True)) as source:
             target = sqlite3.connect(destination)
             try:
                 source.backup(target)
@@ -42,7 +43,7 @@ def restore_metadata(backup: Path, destination: Path) -> Path:
         with MetadataStore(destination) as store:
             if store.schema_version != SCHEMA_VERSION:
                 raise ModMeshError(ErrorCode.STORAGE, "Restored schema does not match")
-        with destination.open("rb") as stream:
+        with destination.open("r+b") as stream:
             os.fsync(stream.fileno())
     except (OSError, sqlite3.Error, ModMeshError):
         destination.unlink(missing_ok=True)

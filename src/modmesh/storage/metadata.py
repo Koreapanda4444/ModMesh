@@ -4,7 +4,7 @@ import json
 import os
 import sqlite3
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Self
@@ -180,7 +180,7 @@ class MetadataStore:
             raise ModMeshError(ErrorCode.STORAGE, "Backup requires a new writable file") from exc
         os.close(descriptor)
         try:
-            with sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True) as source:
+            with closing(sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True)) as source:
                 target = sqlite3.connect(destination)
                 try:
                     source.backup(target)
@@ -188,7 +188,7 @@ class MetadataStore:
                         raise ModMeshError(ErrorCode.INTEGRITY, "Metadata backup is inconsistent")
                 finally:
                     target.close()
-            with destination.open("rb") as stream:
+            with destination.open("r+b") as stream:
                 os.fsync(stream.fileno())
         except (OSError, sqlite3.Error, ModMeshError) as exc:
             destination.unlink(missing_ok=True)
