@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass, replace
 
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
-from modmesh.core.packs import PackEntry
+from modmesh.core.packs import PackEntry, PackSetting
 from modmesh.core.planning import portable_path
 from modmesh.domain.models import SourceRef
 from modmesh.domain.validation import require_id
@@ -38,9 +38,10 @@ class Workspace:
     disabled: tuple[SourceRef, ...] = ()
     unpinned: tuple[SourceRef, ...] = ()
     order: tuple[SourceRef, ...] = ()
+    settings: tuple[PackSetting, ...] = ()
 
     def document(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "schema_version": 2,
             "pack_id": self.pack_id,
             "game_id": self.game_id,
@@ -57,6 +58,9 @@ class Workspace:
                 {"source_id": ref.source_id, "project_id": ref.project_id} for ref in self.order
             ],
         }
+        if self.settings:
+            result["settings"] = [item.document() for item in self.settings]
+        return result
 
     @property
     def digest(self) -> str:
@@ -91,6 +95,7 @@ class Workspace:
                 "disabled",
                 "unpinned",
                 "order",
+                "settings",
             }
             or not {"schema_version", "pack_id", "game_id", "name", "revision", "entries"}
             <= set(data)
@@ -132,7 +137,10 @@ class Workspace:
             pack_name(string_record(data["name"])),
             revision,
             entries,
-            *flags,
+            flags[0],
+            flags[1],
+            flags[2],
+            tuple(PackSetting.read(item) for item in array_record(data.get("settings", []))),
         )
 
 

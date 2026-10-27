@@ -486,6 +486,7 @@ class MainWindow(QMainWindow):
         self.game_details.setPlainText("\n\n".join(details))
 
     def _profiles_loaded(self, profiles: tuple[Profile, ...], active: str | None) -> None:
+        self.workspace_panel.set_profiles(profiles)
         self.profile_selector.blockSignals(True)
         self.profile_selector.clear()
         if not profiles:

@@ -9,11 +9,13 @@ from pathlib import Path
 from modmesh.apps.library import GameLibrary
 from modmesh.apps.runtime import create_game_registry
 from modmesh.apps.workspace_artifacts import import_local
+from modmesh.apps.workspace_legacy import adopt_profile, import_manifest_workspace
 from modmesh.apps.workspace_lifecycle import freeze_workspace, write_lock
 from modmesh.core.config import ClientSettings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.discovery import current_platform
 from modmesh.core.games import DiscoveryContext
+from modmesh.core.pack_io import read_manifest
 from modmesh.core.workspace_history import WorkspaceHistory
 from modmesh.core.workspaces import WorkspaceStore
 from modmesh.domain.models import SourceRef
@@ -44,6 +46,8 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
             "snapshot",
             "history",
             "snapshot-show",
+            "adopt-profile",
+            "import-manifest",
         ),
     )
     parser.add_argument("--game")
@@ -60,9 +64,24 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
     parser.add_argument("--path", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--snapshot")
+    parser.add_argument("--profile")
 
 
 def workspace_command(args: argparse.Namespace, settings: ClientSettings) -> int:
+    if args.action in {"adopt-profile", "import-manifest"}:
+        if args.action == "import-manifest":
+            if args.file is None:
+                raise ModMeshError(ErrorCode.VALIDATION, "Select --file MANIFEST")
+            adopted = import_manifest_workspace(settings, read_manifest(args.file))
+        else:
+            if not args.game or args.path is None or not args.profile:
+                raise ModMeshError(ErrorCode.VALIDATION, "Select --game, --path and --profile")
+            installation = GameLibrary(
+                create_game_registry(settings), settings.paths.database
+            ).inspect(args.game, args.path, DiscoveryContext(current_platform()))
+            adopted = adopt_profile(settings, installation, args.profile, name=args.name)
+        print(json.dumps({**adopted.document(), "digest": adopted.digest}, ensure_ascii=False))
+        return 0
     if args.action in {"lock", "snapshot"}:
         if not args.pack_id or not args.expected or args.path is None:
             raise ModMeshError(

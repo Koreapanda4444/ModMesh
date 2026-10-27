@@ -6,6 +6,7 @@ from modmesh.apps.workspace_artifacts import local_artifact
 from modmesh.core.config import ClientSettings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.lockfiles import PackLock, build_lock
+from modmesh.core.packs import PackContext
 from modmesh.core.rule_resources import builtin_registry
 from modmesh.core.workspaces import WorkspaceStore
 from modmesh.domain.models import GameInstallation
@@ -18,6 +19,7 @@ def freeze_workspace(
 ) -> PackLock:
     with MetadataStore(settings.paths.database) as database:
         workspace = WorkspaceStore(database).get(pack_id)
+        constraint = database.get("workspaces.constraints", pack_id)
     if workspace.digest != expected:
         raise ModMeshError(ErrorCode.CONFLICT, "Workspace changed before lock preview")
     games = create_game_registry(settings)
@@ -29,6 +31,12 @@ def freeze_workspace(
         or current.loader != installation.loader
     ):
         raise ModMeshError(ErrorCode.CONFLICT, "Game or loader changed; rediscover it")
+    if constraint is not None and PackContext.read(
+        constraint["context"]
+    ) != PackContext.from_installation(current):
+        raise ModMeshError(
+            ErrorCode.CONFLICT, "Imported workspace requires its original game/build/loader context"
+        )
     rules = (
         load_rules(settings.paths.database)
         if settings.paths.database.exists()

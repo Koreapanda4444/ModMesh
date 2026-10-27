@@ -19,10 +19,12 @@ from modmesh.apps.desktop.search import WorkStarter
 from modmesh.apps.desktop.widgets import fill_row, table
 from modmesh.apps.desktop.workers import run_async
 from modmesh.apps.workspace_artifacts import import_local
+from modmesh.apps.workspace_legacy import adopt_profile
 from modmesh.apps.workspace_lifecycle import freeze_workspace
 from modmesh.core.config import ClientSettings
 from modmesh.core.games import GameCapability, GameRegistry
 from modmesh.core.packs import PackEntry
+from modmesh.core.profiles import Profile
 from modmesh.core.workspace_history import PackSnapshot, WorkspaceHistory
 from modmesh.core.workspaces import Workspace, WorkspaceStore
 from modmesh.domain.models import GameInstallation
@@ -66,6 +68,13 @@ class WorkspacePanel(QWidget):
         self.snapshot_button = QPushButton("잠금 버전 보존")
         self.snapshot_button.clicked.connect(self.capture_snapshot)
         row.addWidget(self.snapshot_button)
+        layout.addLayout(row)
+        row = QHBoxLayout()
+        self.legacy_profile = QComboBox()
+        row.addWidget(self.legacy_profile, 1)
+        self.adopt_button = QPushButton("기존 프로필을 팩으로 가져오기")
+        self.adopt_button.clicked.connect(self.adopt_legacy)
+        row.addWidget(self.adopt_button)
         layout.addLayout(row)
         self.entries = table(("모드", "파일", "출처", "크기", "사용", "버전 정책"))
         self.entries.itemSelectionChanged.connect(self.selected_entry)
@@ -193,6 +202,30 @@ class WorkspacePanel(QWidget):
         self.generation += 1
         self.installation = installation
         self.refresh()
+
+    def set_profiles(self, profiles: tuple[Profile, ...]) -> None:
+        selected = self.legacy_profile.currentData()
+        self.legacy_profile.clear()
+        for profile in profiles:
+            self.legacy_profile.addItem(profile.name, profile.profile_id)
+        self.legacy_profile.setCurrentIndex(max(0, self.legacy_profile.findData(selected)))
+        self.adopt_button.setEnabled(bool(profiles) and self.installation is not None)
+
+    def adopt_legacy(self) -> None:
+        installation = self.installation
+        identity = self.legacy_profile.currentData()
+        if installation is None or not identity:
+            return
+
+        def work(_cancelled: threading.Event) -> Workspace:
+            return adopt_profile(self.settings, installation, str(identity))
+
+        def adopted(value: object) -> None:
+            assert isinstance(value, Workspace)
+            self.refresh(value.pack_id)
+            self.status.setText("기존 프로필과 파일을 보존하고 새 팩에 연결했습니다.")
+
+        self.start(work, adopted, self.failed, name="기존 프로필 연결")
 
     def refresh(self, selected: str | None = None) -> None:
         self.generation += 1

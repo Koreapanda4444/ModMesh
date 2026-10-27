@@ -40,6 +40,11 @@ from modmesh.apps.operations import prepare_pack, prepare_pack_update, prepare_r
 from modmesh.apps.rules import RuleRegistrationService
 from modmesh.apps.runtime import create_game_registry
 from modmesh.apps.workspace_artifacts import artifact_vault, import_local, local_artifact
+from modmesh.apps.workspace_legacy import (
+    activation_target,
+    adopt_profile,
+    import_manifest_workspace,
+)
 from modmesh.apps.workspace_lifecycle import freeze_workspace
 from modmesh.core.alternatives import find_alternatives
 from modmesh.core.artifact_matching import ArtifactCandidate
@@ -1430,6 +1435,37 @@ async def check_workspace_import(root: Path) -> None:
         raise AssertionError("Changed retained file reused")
 
 
+def check_workspace_legacy(root: Path) -> None:
+    manager, resolution, inputs = temporary_installation(root / "game")
+    plan = manager.plan(resolution, inputs)
+    manager.apply(plan, plan.fingerprint)
+    profiles = ProfileManager(manager.games, manager.installation)
+    original = profiles.create("Legacy profile")
+    before = profile_record(original)
+    settings = ClientSettings(AppPaths(root / "cfg", root / "data", root / "cache"))
+    workspace = adopt_profile(settings, manager.installation, original.profile_id)
+    assert (
+        adopt_profile(settings, manager.installation, original.profile_id).pack_id
+        == workspace.pack_id
+    )
+    assert (
+        profile_record(
+            next(item for item in profiles.profiles() if item.profile_id == original.profile_id)
+        )
+        == before
+    )
+    with MetadataStore(settings.paths.database) as database:
+        binding = database.get(
+            "workspaces.profiles", f"{activation_target(manager.installation)}:{workspace.pack_id}"
+        )
+        assert binding["profile_id"] != original.profile_id
+    manifest = export_profile(profiles, original.profile_id)
+    imported = import_manifest_workspace(settings, manifest)
+    assert import_manifest_workspace(settings, manifest).pack_id == imported.pack_id
+    assert len(imported.entries) == len(original.mods)
+    assert manifest.digest == PackManifest.loads(manifest.dumps()).digest
+
+
 def check_workspace_metadata(root: Path) -> None:
     root.mkdir(parents=True)
     with MetadataStore(root / "metadata.sqlite3") as database:
@@ -1931,6 +1967,7 @@ async def main() -> None:
     logging.disable(logging.CRITICAL)
     with TemporaryDirectory(prefix="modmesh-safety-") as name:
         check_workspace_metadata(Path(name) / "workspaces")
+        check_workspace_legacy(Path(name) / "workspace-legacy")
         await check_workspace_import(Path(name) / "workspace-import")
         check_rule_parsing(Path(name) / "rule-parsing")
         check_rule_discovery(Path(name) / "rule-discovery")
