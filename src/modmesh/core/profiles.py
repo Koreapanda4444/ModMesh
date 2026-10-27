@@ -163,11 +163,15 @@ class ProfilePlan:
 class ProfileManager(RemovalManager):
     def context(self) -> dict[str, object]:
         item = self.installation
+        version = asdict(item.version)
+        if (item.version.evidence or "").startswith("game-rule:"):
+            parts = str(item.version.evidence).split(":", 2)
+            version["evidence"] = parts[2] if len(parts) == 3 else "game-rule"
         return {
             "game_id": item.game_id,
             "edition": item.edition,
             "platform": item.platform.value,
-            "version": asdict(item.version),
+            "version": version,
             "loader": asdict(item.loader) if item.loader else None,
         }
 

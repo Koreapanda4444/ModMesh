@@ -19,13 +19,16 @@ from modmesh.apps.desktop.accounts import AccountPanel
 from modmesh.apps.desktop.custom import CustomPanel
 from modmesh.apps.desktop.packs import PacksPanel
 from modmesh.apps.desktop.publishing import PublishingPanel
+from modmesh.apps.desktop.rules import RulesPanel
+from modmesh.apps.desktop.search import SearchPanel
 from modmesh.apps.desktop.workers import Worker
 from modmesh.apps.desktop.workshop import WorkshopPanel
+from modmesh.apps.runtime import create_game_registry
 from modmesh.apps.server.database import Database
 from modmesh.apps.server.main import create_app
 from modmesh.core.config import AppPaths, ClientSettings, ServerSettings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError, redact_text
-from modmesh.core.games import GameRegistry
+from modmesh.core.games import DiscoveryContext, GameRegistry
 from modmesh.core.packs import PackContext, PackManifest
 from modmesh.domain.models import GameInstallation, Platform
 from modmesh.remote.accounts import AccountClient
@@ -268,6 +271,48 @@ def verify():
             workshop.set_context(None)
             assert workshop.list.rowCount() == 0
             workshop.close()
+            rule_game = root / "User Game"
+            rule_game.mkdir()
+            (rule_game / "Game.exe").write_bytes(b"game fixture; never executed")
+            registrations = []
+            rules = RulesPanel(
+                settings, DiscoveryContext(Platform.WINDOWS, home=root), start, registrations.append
+            )
+            rules.game_id.setText("gui-game")
+            rules.game_name.setText("사용자 게임")
+            rules.executable.setText("Game.exe")
+            rules.folder.setText(str(rule_game))
+            rules.generate()
+            rules.check()
+            wait()
+            assert rules.approve.isEnabled(), rules.status.text()
+            assert store.get("rules.installed", "gui-game") is None
+            rules.editor.setPlainText(rules.editor.toPlainText() + "\n")
+            assert not rules.approve.isEnabled()
+            rules.check()
+            wait()
+            rules.register()
+            wait()
+            assert len(registrations) == 1, rules.status.text()
+            assert store.get("rules.installed", "gui-game") is not None
+            registry = create_game_registry(settings)
+            installation = registry.get("gui-game").inspect(rule_game, Platform.WINDOWS)
+            assert installation is not None
+            custom_rule = CustomPanel(settings, start, games=registry)
+            custom_rule.set_context(installation)
+            wait()
+            assert custom_rule.register_button.isEnabled()
+            custom_rule.name.setText("Custom game mod")
+            custom_rule.location.setText(str(local))
+            custom_rule.register()
+            wait()
+            assert custom_rule.list.rowCount() == 1, custom_rule.status.text()
+            search_rule = SearchPanel(settings, store, start)
+            search_rule.set_context(installation)
+            assert search_rule.game.currentData() == "gui-game"
+            search_rule.close()
+            custom_rule.close()
+            rules.close()
             panel.server.setText("http://127.0.0.1")
             panel.select_server()
             wait()

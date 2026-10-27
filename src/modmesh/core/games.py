@@ -229,6 +229,13 @@ class GameAdapter(ABC):
 class GameRegistry:
     def __init__(self) -> None:
         self._adapters: dict[str, GameAdapter] = {}
+        self.issues: tuple[EnvironmentIssue, ...] = ()
+
+    def replace(self, adapter: GameAdapter, *, expected: GameAdapter) -> None:
+        key = adapter.game.game_id
+        if self._adapters.get(key) is not expected:
+            raise ModMeshError(ErrorCode.CONFLICT, "Game registration changed; refresh it first")
+        self._adapters[key] = adapter
 
     def register(self, adapter: GameAdapter) -> None:
         key = adapter.game.game_id

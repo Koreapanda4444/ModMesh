@@ -6,17 +6,20 @@ from pathlib import Path
 from modmesh.adapters.games.ark_evolved import ArkEvolvedAdapter
 from modmesh.adapters.games.minecraft import MinecraftAdapter
 from modmesh.adapters.games.palworld import PalworldAdapter
+from modmesh.adapters.games.rule_based import RuleGameAdapter
 from modmesh.adapters.sources.curseforge import CurseForgeSource
 from modmesh.adapters.sources.custom import CustomSource
 from modmesh.adapters.sources.modrinth import ModrinthSource
 from modmesh.adapters.sources.nexus import NexusSource
 from modmesh.adapters.sources.workshop import WorkshopSource
-from modmesh.core.config import load_client_settings
+from modmesh.core.config import ClientSettings, load_client_settings
 from modmesh.core.diagnostics import ModMeshError
-from modmesh.core.games import GameRegistry
+from modmesh.core.games import EnvironmentIssue, GameRegistry
 from modmesh.core.network import EnvironmentCredentials
 from modmesh.core.priorities import SourcePriorities
+from modmesh.core.rules import RuleOrigin
 from modmesh.core.sources import SourceAdapter, SourceDescriptor, SourceRegistry, UnavailableSource
+from modmesh.storage.rules import load_rules
 
 DEFAULT_SOURCE_PRIORITIES = {
     "ark-evolved": ("workshop",),
@@ -46,11 +49,17 @@ def download_domains(registry: SourceRegistry) -> dict[str, tuple[str, ...]]:
     }
 
 
-def create_game_registry() -> GameRegistry:
+def create_game_registry(settings: ClientSettings | None = None) -> GameRegistry:
     registry = GameRegistry()
     registry.register(PalworldAdapter())
     registry.register(MinecraftAdapter())
     registry.register(ArkEvolvedAdapter())
+    issues: list[EnvironmentIssue] = []
+    rules = load_rules((settings or load_client_settings()).paths.database, issues=issues)
+    for entry in rules.all():
+        if entry.origin != RuleOrigin.BUILTIN:
+            registry.register(RuleGameAdapter(entry))
+    registry.issues = tuple(issues)
     return registry
 
 

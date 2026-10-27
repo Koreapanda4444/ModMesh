@@ -97,7 +97,7 @@ class SearchPanel(QWidget):
         self.version.setPlaceholderText("게임 버전 · 미입력 시 전체")
         filters.addWidget(self.version)
         self.loader = QComboBox()
-        for loader in ("", "fabric", "forge", "neoforge", "quilt"):
+        for loader in ("", "fabric", "forge", "neoforge", "quilt", "bepinex", "ue4ss"):
             self.loader.addItem(loader or "모든 로더", loader)
         filters.addWidget(self.loader)
         self.sort = QComboBox()
@@ -165,6 +165,9 @@ class SearchPanel(QWidget):
         self.installation = installation
         if installation is not None:
             index = self.game.findData(installation.game_id)
+            if index < 0:
+                self.game.addItem(installation.game_id, installation.game_id)
+                index = self.game.findData(installation.game_id)
             self.game.setCurrentIndex(index)
             self.version.setText(installation.version.value or "")
             loader = installation.loader.name if installation.loader else ""

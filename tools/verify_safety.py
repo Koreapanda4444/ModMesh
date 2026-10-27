@@ -37,6 +37,7 @@ from modmesh.adapters.sources.custom import CustomSource
 from modmesh.adapters.sources.workshop import WorkshopSource
 from modmesh.apps.library import GameLibrary
 from modmesh.apps.operations import prepare_pack, prepare_pack_update, prepare_resolution
+from modmesh.apps.rules import RuleRegistrationService
 from modmesh.apps.runtime import create_game_registry
 from modmesh.core.alternatives import find_alternatives
 from modmesh.core.artifact_matching import ArtifactCandidate
@@ -75,6 +76,7 @@ from modmesh.domain.models import ModFile, ModVersion, Platform, SourceProject, 
 from modmesh.domain.workspaces import ActivationTarget, PackIdentity
 from modmesh.storage.metadata import MetadataStore
 from modmesh.storage.recovery import restore_metadata
+from modmesh.storage.rules import NAMESPACE, load_rules
 
 DATA = b"verified bytes\x00" * 40000
 FILE = ModFile(
@@ -1508,6 +1510,31 @@ def check_rule_installation(root: Path) -> None:
         assert manager.apply(plan, plan.fingerprint).state == "committed"
         expected = game / ("Mods/Nested/One.pak" if kind == "mapped" else "Mods/One.pak")
         assert expected.read_bytes() == b"managed mod"
+        if kind == "file":
+            profiles = ProfileManager(games, installation)
+            captured = profiles.create("Managed profile")
+            empty = profiles.create("Empty profile", capture=False)
+            switch = profiles.plan_switch(empty.profile_id)
+            assert switch.applicable, switch.issues
+            assert profiles.switch(switch, switch.fingerprint).state == "committed"
+            assert not expected.exists()
+            renamed = replace(rule, revision=2, name="Renamed game")
+            updated_entry = registry.register(
+                renamed,
+                RuleOrigin.USER,
+                "local.json",
+                approved_digest=renamed.digest,
+                expected_digest=rule.digest,
+            )
+            updated_adapter = RuleGameAdapter(updated_entry)
+            games.replace(updated_adapter, expected=adapter)
+            installation = updated_adapter.inspect(game, Platform.WINDOWS)
+            profiles = ProfileManager(games, installation)
+            restore = profiles.plan_switch(captured.profile_id)
+            assert restore.applicable, restore.issues
+            assert profiles.switch(restore, restore.fingerprint).state == "committed"
+            assert expected.read_bytes() == b"managed mod"
+            manager = RemovalManager(games, installation)
         assert any(
             item.files[0].path == "Mods/user.pak" for item in adapter.scan_mods(installation)
         )
@@ -1607,6 +1634,115 @@ def check_rule_loaders(root: Path) -> None:
         assert (game / marker).read_bytes() == b"loader presence fixture; not executed"
 
 
+def check_rule_registration(root: Path) -> None:
+    root.mkdir(parents=True)
+    game = root / "Game"
+    game.mkdir()
+    (game / "Game.exe").write_bytes(b"game fixture; not executed")
+    (game / "Saves").mkdir()
+    (game / "Saves/save.dat").write_bytes(b"user save")
+    before = {
+        path.relative_to(game): path.read_bytes() for path in game.rglob("*") if path.is_file()
+    }
+    settings = ClientSettings(AppPaths(root / "cfg", root / "data", root / "cache"))
+    context = DiscoveryContext(Platform.WINDOWS, (), {}, root)
+    service = RuleRegistrationService(settings.paths.database, context)
+    document = rule_document()
+    document["launch"] = {"strategy": "executable", "executable": "Game.exe"}
+    review = service.review(json.dumps(document), path=game)
+    assert review.dry_run and not settings.paths.database.exists()
+    try:
+        service.register(json.dumps(document), "0" * 64, path=game)
+    except ModMeshError:
+        assert not settings.paths.database.exists()
+    else:
+        raise AssertionError("Rule registration without exact approval")
+    result = service.register(json.dumps(document), review.rule.digest, path=game)
+    assert result.installation is not None
+    games = create_game_registry(settings)
+    adapter = games.get("user-game")
+    assert isinstance(adapter, RuleGameAdapter) and adapter.rule.digest == review.rule.digest
+    discovered = GameLibrary(games, settings.paths.database).discover(context, game_id="user-game")
+    assert len(discovered.records) == 1 and discovered.records[0].origin == "manual"
+    with MetadataStore(settings.paths.database) as store:
+        store.put("user.extension", "untouched", {"value": "기존 값"})
+    updated = replace(review.rule, revision=2, name="Updated game")
+    next_review = service.review(updated.to_json(), path=game)
+    assert next_review.previous_digest == review.rule.digest
+    try:
+        service.register(updated.to_json(), updated.digest, expected_digest="0" * 64, path=game)
+    except ModMeshError:
+        pass
+    else:
+        raise AssertionError("Stale rule update accepted")
+    changed = service.register(
+        updated.to_json(), updated.digest, expected_digest=review.rule.digest, path=game
+    )
+    assert changed.backup is not None and changed.backup.is_file()
+    with MetadataStore(changed.backup) as backup:
+        assert json.loads(backup.get(NAMESPACE, "user-game")["document"])["revision"] == 1
+    with MetadataStore(settings.paths.database) as store:
+        assert store.get("user.extension", "untouched") == {"value": "기존 값"}
+    current = create_game_registry(settings).get("user-game").inspect(game, Platform.WINDOWS)
+    assert current.version.evidence != result.installation.version.evidence
+    assert (
+        ProfileManager(games, result.installation).context()
+        == ProfileManager(create_game_registry(settings), current).context()
+    )
+    assert before == {
+        path.relative_to(game): path.read_bytes() for path in game.rglob("*") if path.is_file()
+    }
+    cli_data = root / "cli-data"
+    path = root / "rule.json"
+    path.write_text(review.rule.to_json(), encoding="utf-8")
+    config = root / "client.toml"
+    config.write_text("", encoding="utf-8")
+    environment = {
+        key: value for key, value in os.environ.items() if not key.startswith("MODMESH_")
+    }
+    environment["MODMESH_DATA_DIR"] = str(cli_data)
+    command = [sys.executable, "-m", "modmesh.apps.cli", "--config", str(config), "rules"]
+    checked = subprocess.run(
+        [*command, "check", "--file", str(path)],
+        env=environment,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=30,
+    )
+    assert json.loads(checked.stdout)["digest"] == review.rule.digest
+    assert not (cli_data / "metadata.sqlite3").exists()
+    rejected = subprocess.run(
+        [*command, "register", "--file", str(path), "--approve", "0" * 64],
+        env=environment,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+    )
+    assert rejected.returncode == 1 and not (cli_data / "metadata.sqlite3").exists()
+    registered = subprocess.run(
+        [*command, "register", "--file", str(path), "--approve", review.rule.digest],
+        env=environment,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=30,
+    )
+    assert json.loads(registered.stdout)["digest"] == review.rule.digest
+    assert load_rules(cli_data / "metadata.sqlite3").get("user-game").approved
+    with MetadataStore(settings.paths.database) as store:
+        saved = store.get(NAMESPACE, "user-game")
+        saved["approval"] = "0" * 64
+        store.put(NAMESPACE, "user-game", saved)
+    quarantined = create_game_registry(settings)
+    assert len(quarantined.all()) == 3 and quarantined.issues
+    with MetadataStore(settings.paths.database) as store:
+        assert store.get(NAMESPACE, "user-game")["approval"] == "0" * 64
+
+
 def check_legacy_contracts(root: Path) -> None:
     root.mkdir(parents=True)
     game = root / "Palworld"
@@ -1677,6 +1813,7 @@ async def main() -> None:
         check_rule_discovery(Path(name) / "rule-discovery")
         check_rule_installation(Path(name) / "rule-installation")
         check_rule_loaders(Path(name) / "rule-loaders")
+        check_rule_registration(Path(name) / "rule-registration")
         check_legacy_contracts(Path(name) / "legacy-contracts")
         await asyncio.wait_for(check_downloads(Path(name)), timeout=20)
         await asyncio.wait_for(check_linked_downloads(Path(name)), timeout=20)

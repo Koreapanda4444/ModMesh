@@ -129,7 +129,7 @@ async def prepare_resolution(
                     )
         if progress is not None:
             progress("검증한 파일의 변경 계획을 작성합니다.")
-        manager = InstallationManager(create_game_registry(), installation)
+        manager = InstallationManager(create_game_registry(settings), installation)
         if profile_payload:
             manager = ProfileManager(manager.games, installation)
             plan = await _blocking(

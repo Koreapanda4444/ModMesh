@@ -39,6 +39,7 @@ class Diagnostic:
         if not blocking and code in {"steam_managed", "manual_handoff"}:
             state = SupportState.HANDOFF
         messages = {
+            "invalid_game_rule": "저장된 게임 규칙을 거부했습니다. 원본 규칙과 백업을 확인하세요.",
             "unknown_version": "게임 버전을 확인하지 못했습니다.",
             "unverified_steam_build": "Steam 빌드를 확인하지 못했습니다.",
             "steam_managed": "구독·업데이트·제거는 Steam에서 진행하세요.",

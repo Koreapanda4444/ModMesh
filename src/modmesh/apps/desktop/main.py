@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from modmesh import __version__
+from modmesh.adapters.games.rule_based import RuleGameAdapter
 from modmesh.apps.desktop.accounts import AccountPanel
 from modmesh.apps.desktop.custom import CustomPanel
 from modmesh.apps.desktop.details import ModDetails
@@ -42,11 +43,13 @@ from modmesh.apps.desktop.jobs import JobsPanel
 from modmesh.apps.desktop.packs import PacksPanel
 from modmesh.apps.desktop.profiles import ProfilesPanel
 from modmesh.apps.desktop.publishing import PublishingPanel
+from modmesh.apps.desktop.rules import RulesPanel
 from modmesh.apps.desktop.search import SearchPanel
 from modmesh.apps.desktop.widgets import fill_row, table
 from modmesh.apps.desktop.workers import Worker
 from modmesh.apps.desktop.workshop import WorkshopPanel
 from modmesh.apps.library import GameLibrary
+from modmesh.apps.rules import RuleRegistration
 from modmesh.apps.runtime import create_game_registry
 from modmesh.core.config import ClientSettings, ConfigurationError, load_client_settings
 from modmesh.core.diagnostics import configure_logging, install_exception_hook
@@ -73,7 +76,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.settings = settings
         self.store = store
-        self.games = games or create_game_registry()
+        self.games = games or create_game_registry(settings)
         self.context = context or DiscoveryContext(current_platform(), environment=os.environ)
         self.records: tuple[DiscoveryRecord, ...] = ()
         self.workers: set[Worker] = set()
@@ -171,6 +174,9 @@ class MainWindow(QMainWindow):
         library.addWidget(self.discovery_status)
         self.pages.addWidget(self.library)
         self.search_panel = SearchPanel(settings, store, self.start_work)
+        for adapter in self.games.all():
+            if self.search_panel.game.findData(adapter.game.game_id) < 0:
+                self.search_panel.game.addItem(adapter.game.name, adapter.game.game_id)
         self.mod_details = ModDetails(
             settings,
             self.games,
@@ -213,12 +219,17 @@ class MainWindow(QMainWindow):
         self.publishing_panel = PublishingPanel(self.account_panel, self.start_work)
         self.pages.addWidget(self.publishing_panel)
         self.navigation.addItem("온라인 팩")
-        self.custom_panel = CustomPanel(settings, self.start_work)
+        self.custom_panel = CustomPanel(settings, self.start_work, games=self.games)
         self.pages.addWidget(self.custom_panel)
         self.navigation.addItem("커스텀 출처")
         self.workshop_panel = WorkshopPanel(self.start_work)
         self.pages.addWidget(self.workshop_panel)
         self.navigation.addItem("Steam Workshop")
+        self.rules_panel = RulesPanel(
+            settings, self.context, self.start_work, self._rule_registered
+        )
+        self.pages.addWidget(self.rules_panel)
+        self.navigation.addItem("게임 규칙")
         outer.addLayout(body, 1)
         self.setCentralWidget(content)
         self.navigation.setCurrentRow(0)
@@ -255,6 +266,37 @@ class MainWindow(QMainWindow):
     def selected_game(self) -> DiscoveryRecord | None:
         index = self.game_selector.currentIndex()
         return self.records[index] if 0 <= index < len(self.records) else None
+
+    def _rule_registered(self, registration: RuleRegistration) -> None:
+        adapter = RuleGameAdapter(registration.entry)
+        previous = next(
+            (item for item in self.games.all() if item.game.game_id == adapter.game.game_id), None
+        )
+        if previous is None:
+            self.games.register(adapter)
+        else:
+            self.games.replace(adapter, expected=previous)
+        index = self.manual_game.findData(adapter.game.game_id)
+        if index < 0:
+            self.manual_game.addItem(adapter.game.name, adapter.game.game_id)
+        else:
+            self.manual_game.setItemText(index, adapter.game.name)
+        index = self.search_panel.game.findData(adapter.game.game_id)
+        if index < 0:
+            self.search_panel.game.addItem(adapter.game.name, adapter.game.game_id)
+        else:
+            self.search_panel.game.setItemText(index, adapter.game.name)
+        self.mod_details.clear_plan()
+        self.packs_panel.clear_plan()
+        self._scan_after_rule()
+
+    def _scan_after_rule(self) -> None:
+        if self.closing:
+            return
+        if not self.rescan.isEnabled():
+            QTimer.singleShot(100, self._scan_after_rule)
+            return
+        self.discover()
 
     def start_work(
         self,

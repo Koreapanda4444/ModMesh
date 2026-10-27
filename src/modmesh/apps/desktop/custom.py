@@ -19,15 +19,18 @@ from modmesh.apps.desktop.search import WorkStarter
 from modmesh.apps.desktop.widgets import fill_row, table
 from modmesh.apps.runtime import create_game_registry
 from modmesh.core.config import ClientSettings
-from modmesh.core.games import GameCapability
+from modmesh.core.games import GameCapability, GameRegistry
 from modmesh.domain.models import GameInstallation
 from modmesh.storage.installed import decode_mod
 
 
 class CustomPanel(QWidget):
-    def __init__(self, settings: ClientSettings, start: WorkStarter) -> None:
+    def __init__(
+        self, settings: ClientSettings, start: WorkStarter, *, games: GameRegistry | None = None
+    ) -> None:
         super().__init__()
         self.settings, self.start = settings, start
+        self.games = games or create_game_registry(settings)
         self.installation: GameInstallation | None = None
         self.generation = 0
         self.identities: list[str] = []
@@ -83,7 +86,7 @@ class CustomPanel(QWidget):
             bool(
                 installation
                 and GameCapability.INSTALL_RULES
-                in create_game_registry().get(installation.game_id).capabilities
+                in self.games.get(installation.game_id).capabilities
             )
         )
         self.refresh()

@@ -29,6 +29,17 @@ def _path_key(path: Path, platform: Platform) -> str:
     return value.casefold() if platform == Platform.WINDOWS else value
 
 
+def manual_path_record(
+    saved: dict[str, object] | None, path: Path, platform: Platform
+) -> dict[str, object]:
+    raw = (saved or {}).get("paths", [])
+    if not isinstance(raw, list) or any(not isinstance(value, str) for value in raw):
+        raise ModMeshError(ErrorCode.STORAGE, "Invalid saved game path configuration")
+    paths = {_path_key(Path(str(value)), platform): str(value) for value in raw}
+    paths[_path_key(path, platform)] = str(path)
+    return {"paths": sorted(paths.values())}
+
+
 @dataclass(frozen=True)
 class DiscoveryRecord:
     installation: GameInstallation
@@ -78,13 +89,13 @@ class DiscoveryEngine:
                 details={"issues": [asdict(issue) for issue in report.issues]},
             )
         with self.store.transaction(write=True) as transaction:
-            saved = transaction.get("discovery.manual", game_id) or {"paths": []}
-            raw = saved.get("paths")
-            if not isinstance(raw, list) or any(not isinstance(value, str) for value in raw):
-                raise ModMeshError(ErrorCode.STORAGE, "Invalid saved game path configuration")
-            paths = {_path_key(Path(value), context.platform): str(value) for value in raw}
-            paths[_path_key(path, context.platform)] = str(path)
-            transaction.put("discovery.manual", game_id, {"paths": sorted(paths.values())})
+            transaction.put(
+                "discovery.manual",
+                game_id,
+                manual_path_record(
+                    transaction.get("discovery.manual", game_id), path, context.platform
+                ),
+            )
         return installation
 
     def unregister_manual(self, game_id: str, path: Path, context: DiscoveryContext) -> bool:
@@ -112,7 +123,7 @@ class DiscoveryEngine:
             raise ModMeshError(ErrorCode.VALIDATION, "Invalid discovery candidate limit")
         adapters = (self.registry.get(game_id),) if game_id else self.registry.all()
         records: dict[tuple[str, str], DiscoveryRecord] = {}
-        issues: list[EnvironmentIssue] = []
+        issues: list[EnvironmentIssue] = list(self.registry.issues)
         for adapter in adapters:
             key = adapter.game.game_id
             if context.platform not in adapter.game.platforms:

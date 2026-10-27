@@ -67,6 +67,10 @@ Minecraft 다중 출처는 선택 인스턴스의 게임 버전·로더로 조�
 
 ## 설정
 
+내장 게임 외에 선언형 JSON 규칙으로 게임을 추가할 수 있습니다. 데스크톱의 **게임 규칙**에서 게임·모드 폴더·로더·실행 정의를 입력해 JSON을 만들거나 불러오고, 변경 없이 검사한 뒤 명시적으로 승인합니다. CLI는 `modmesh-cli rules check --file game.json`이 반환한 해시를 `rules register --file game.json --approve SHA256`에 전달합니다. 경로를 함께 등록하려면 두 명령에 `--path <게임 폴더>`를 지정합니다. 개정 업데이트는 더 큰 revision과 `--previous PREVIOUS_SHA256`이 필요합니다. `rules list`와 `games`에서 출처·승인 상태와 기능별 지원을 확인합니다. [규칙 계약과 사용법](docs/game-rules.md)을 참고하세요.
+
+규칙 기반 파일/ZIP/경로 매핑과 BepInEx·UE4SS 배치는 기존 승인·파일 보호·제거·프로필 엔진을 사용합니다. 로더는 별도 설치가 필요합니다. 내장 게임 덮어쓰기와 위험 경로·명령을 거부하며, 잘못 저장된 규칙은 원본을 보존하고 탐색 진단에 표시합니다. **실행 정의는 현재 저장·검증만 하며 게임 실행 기능은 아직 제공하지 않습니다.** 새로운 독립 팩 workspace·잠금 파일·동기화·Play 통합은 이후 단계입니다.
+
 클라이언트는 `--config <TOML>` 또는 `MODMESH_CONFIG`로 설정을 지정합니다. 기본 파일은 `%APPDATA%/ModMesh/config.toml`이며, 없으면 기본값을 사용합니다. `[client]`에는 `data_dir`, `cache_dir`, `cache_max_bytes`, `server_url`, `log_level`과 `source_priorities`를 지정할 수 있습니다. `MODMESH_DATA_DIR`, `MODMESH_CACHE_DIR`, `MODMESH_CACHE_MAX_BYTES`, `MODMESH_SERVER_URL`, `MODMESH_LOG_LEVEL` 환경 변수가 우선합니다.
 
 서버는 `--config` 또는 `MODMESH_SERVER_CONFIG`의 `[server]` 설정과 `MODMESH_BIND_HOST`, `MODMESH_BIND_PORT`, `MODMESH_ENV`, `MODMESH_DATABASE_URL`, `MODMESH_LOG_LEVEL`을 사용합니다. 개발 모드의 DB 없는 health는 `database: disabled`로 표시합니다. 운영 모드는 PostgreSQL URL이 필수이며, 먼저 `modmesh-server --migrate`를 실행하고 서버를 시작합니다. 마이그레이션은 서버 시작 시 자동 실행하지 않습니다. `--check`는 지정한 DB를 검사하며, DB를 지정하지 않은 개발 검사는 임시 SQLite에서 수행합니다.

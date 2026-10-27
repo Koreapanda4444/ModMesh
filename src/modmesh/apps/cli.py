@@ -10,6 +10,7 @@ from pathlib import Path
 
 from modmesh.apps.library import GameLibrary
 from modmesh.apps.operations import prepare_resolution
+from modmesh.apps.rules import RuleRegistrationService
 from modmesh.apps.runtime import (
     create_game_registry,
     download_domains,
@@ -35,17 +36,25 @@ from modmesh.core.local_files import copy_local
 from modmesh.core.matching import ProjectMatcher
 from modmesh.core.removal import RemovalManager
 from modmesh.core.resolver import DependencyResolution, DependencyResolver, ResolvedMod
+from modmesh.core.rule_io import read_rule
 from modmesh.core.search import SearchState, UnifiedSearch
 from modmesh.core.sources import SearchRequest, SearchSort, SourceRegistry, VersionQuery
 from modmesh.domain.models import GameInstallation, ModVersion, SourceRef
 from modmesh.storage.metadata import MetadataStore
 from modmesh.storage.recovery import restore_metadata
+from modmesh.storage.rules import load_rules
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="ModMesh core commands")
     parser.add_argument("--config", type=Path)
     commands = parser.add_subparsers(dest="command", required=True)
+    rules_command = commands.add_parser("rules", help="Review and explicitly approve game rules")
+    rules_command.add_argument("action", choices=("list", "check", "register"))
+    rules_command.add_argument("--file", type=Path)
+    rules_command.add_argument("--path", type=Path, help="Optional installed game folder")
+    rules_command.add_argument("--approve", help="Exact SHA-256 from rules check")
+    rules_command.add_argument("--previous", help="Prior rule digest for a reviewed update")
     games_command = commands.add_parser("games", help="Report game capabilities and evidence")
     games_command.add_argument("--game")
     games_command.add_argument("--path", type=Path)
@@ -131,6 +140,64 @@ def main() -> int:
     try:
         settings = load_client_settings(args.config)
         configure_logging(level=settings.log_level)
+        if args.command == "rules":
+            if args.action == "list":
+                registry_rules = load_rules(settings.paths.database)
+                print(
+                    json.dumps(
+                        [
+                            {
+                                "game_id": entry.rule.game_id,
+                                "name": entry.rule.name,
+                                "revision": entry.rule.revision,
+                                "origin": entry.origin.value,
+                                "trust": entry.trust,
+                                "digest": entry.rule.digest,
+                            }
+                            for entry in registry_rules.all(include_pending=True)
+                        ],
+                        ensure_ascii=False,
+                    )
+                )
+                return 0
+            if args.file is None:
+                raise ModMeshError(ErrorCode.VALIDATION, "Rule check/registration requires --file")
+            rule_document = read_rule(args.file)
+            service = RuleRegistrationService(
+                settings.paths.database,
+                DiscoveryContext(current_platform(), environment=os.environ),
+            )
+            if args.action == "check":
+                review = service.review(
+                    rule_document.to_json(), path=args.path, source=args.file.name
+                )
+                print(
+                    json.dumps(
+                        {**asdict(review), "digest": review.rule.digest},
+                        ensure_ascii=False,
+                        default=str,
+                    )
+                )
+            else:
+                if args.approve is None:
+                    raise ModMeshError(
+                        ErrorCode.VALIDATION, "Review the rule and pass --approve DIGEST"
+                    )
+                registered = service.register(
+                    rule_document.to_json(),
+                    args.approve,
+                    expected_digest=args.previous,
+                    path=args.path,
+                    source=args.file.name,
+                )
+                print(
+                    json.dumps(
+                        {**asdict(registered), "digest": registered.entry.rule.digest},
+                        ensure_ascii=False,
+                        default=str,
+                    )
+                )
+            return 0
         if args.command == "metadata":
             if args.action == "backup":
                 with MetadataStore(settings.paths.database) as store:
@@ -142,7 +209,7 @@ def main() -> int:
             print(json.dumps({"action": args.action, "path": str(output)}, ensure_ascii=False))
             return 0
         if args.command == "games":
-            registry = create_game_registry()
+            registry = create_game_registry(settings)
             library = GameLibrary(registry, settings.paths.database)
             context = DiscoveryContext(current_platform(), environment=os.environ)
             adapters = (registry.get(args.game),) if args.game else registry.all()
@@ -168,7 +235,7 @@ def main() -> int:
             )
             return 0
         if args.command in {"installed", "recover", "remove"}:
-            games = create_game_registry()
+            games = create_game_registry(settings)
             installation = games.get(args.game).inspect(
                 args.path.expanduser().resolve(), current_platform()
             )
@@ -224,7 +291,7 @@ def main() -> int:
         if args.command in {"versions", "download", "resolve", "plan"}:
             return asyncio.run(_source_files(args, settings))
         context = DiscoveryContext(current_platform(), tuple(args.root), os.environ)
-        registry = create_game_registry()
+        registry = create_game_registry(settings)
         result = GameLibrary(registry, settings.paths.database).discover(
             context,
             game_id=args.game,
@@ -285,7 +352,7 @@ async def _source_files(args: argparse.Namespace, settings: ClientSettings) -> i
     installation = None
     if args.command == "plan":
         installation = (
-            create_game_registry()
+            create_game_registry(settings)
             .get(args.game)
             .inspect(args.path.expanduser().resolve(), current_platform())
         )
