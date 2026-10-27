@@ -40,6 +40,8 @@ from modmesh.apps.operations import prepare_pack, prepare_pack_update, prepare_r
 from modmesh.apps.rules import RuleRegistrationService
 from modmesh.apps.runtime import create_game_registry
 from modmesh.apps.workspace_artifacts import artifact_vault, import_local, local_artifact
+from modmesh.apps.workspace_lifecycle import freeze_workspace
+from modmesh.core.lockfiles import PackLock
 from modmesh.core.alternatives import find_alternatives
 from modmesh.core.artifact_matching import ArtifactCandidate
 from modmesh.core.cache import ArtifactCache
@@ -1366,6 +1368,24 @@ async def check_workspace_import(root: Path) -> None:
         assert reordered.enabled_entries == enabled.enabled_entries
         imported = reordered
     assert str(root) not in json.dumps(imported.document())
+    game = root / "Game"
+    for executable in ("Palworld.exe", "Pal/Binaries/Win64/Palworld-Win64-Shipping.exe"):
+        binary = game / executable
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        binary.write_bytes(b"game fixture; never launched")
+    installation = create_game_registry(settings).get("palworld").inspect(game, Platform.WINDOWS)
+    lock = freeze_workspace(settings, imported.pack_id, installation, imported.digest)
+    assert lock.digest == freeze_workspace(settings, imported.pack_id, installation, imported.digest).digest
+    assert PackLock.loads(lock.dumps()).digest == lock.digest
+    assert str(root).encode() not in lock.dumps() and lock.warnings
+    invalid = lock.document()
+    invalid["entries"] = []
+    try:
+        PackLock.read(invalid)
+    except ModMeshError:
+        pass
+    else:
+        raise AssertionError("Lock entries did not match enabled definition")
     source.unlink()
     retained = local_artifact(settings, imported.entries[0].mod.file)
     assert retained.read_bytes() == b"local content"

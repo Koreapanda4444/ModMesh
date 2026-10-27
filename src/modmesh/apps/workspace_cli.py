@@ -6,10 +6,14 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 
+from modmesh.apps.library import GameLibrary
 from modmesh.apps.runtime import create_game_registry
 from modmesh.apps.workspace_artifacts import import_local
+from modmesh.apps.workspace_lifecycle import freeze_workspace, write_lock
 from modmesh.core.config import ClientSettings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
+from modmesh.core.discovery import current_platform
+from modmesh.core.games import DiscoveryContext
 from modmesh.core.workspaces import WorkspaceStore
 from modmesh.domain.models import SourceRef
 from modmesh.storage.metadata import MetadataStore
@@ -35,6 +39,7 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
             "recipe",
             "remove-entry",
             "order",
+            "lock",
         ),
     )
     parser.add_argument("--game")
@@ -48,9 +53,26 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
     parser.add_argument("--rule")
     parser.add_argument("--prefix")
     parser.add_argument("--order", action="append", default=[])
+    parser.add_argument("--path", type=Path)
+    parser.add_argument("--output", type=Path)
 
 
 def workspace_command(args: argparse.Namespace, settings: ClientSettings) -> int:
+    if args.action == "lock":
+        if not args.pack_id or not args.expected or args.path is None:
+            raise ModMeshError(
+                ErrorCode.VALIDATION, "Lock preview needs --id, --path and --expected"
+            )
+        with MetadataStore(settings.paths.database) as database:
+            workspace = WorkspaceStore(database).get(args.pack_id)
+        installation = GameLibrary(create_game_registry(settings), settings.paths.database).inspect(
+            workspace.game_id, args.path, DiscoveryContext(current_platform())
+        )
+        lock = freeze_workspace(settings, args.pack_id, installation, args.expected)
+        if args.output is not None:
+            write_lock(args.output, lock)
+        print(json.dumps({"digest": lock.digest, "lock": lock.document()}, ensure_ascii=False))
+        return 0
     if args.action == "import":
         if not args.pack_id or args.file is None or not args.expected:
             raise ModMeshError(ErrorCode.VALIDATION, "Import needs --id, --file and --expected")
