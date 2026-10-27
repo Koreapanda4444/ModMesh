@@ -39,6 +39,7 @@ from modmesh.apps.library import GameLibrary
 from modmesh.apps.operations import prepare_pack, prepare_pack_update, prepare_resolution
 from modmesh.apps.rules import RuleRegistrationService
 from modmesh.apps.runtime import create_game_registry
+from modmesh.apps.workspace_artifacts import artifact_vault, import_local, local_artifact
 from modmesh.core.alternatives import find_alternatives
 from modmesh.core.artifact_matching import ArtifactCandidate
 from modmesh.core.cache import ArtifactCache
@@ -1335,6 +1336,44 @@ async def check_ark(root: Path) -> None:
         raise AssertionError("Invalid Workshop ID accepted")
 
 
+async def check_workspace_import(root: Path) -> None:
+    root.mkdir(parents=True)
+    settings = ClientSettings(AppPaths(root / "cfg", root / "data", root / "cache"))
+    with MetadataStore(settings.paths.database) as database:
+        workspace = WorkspaceStore(database).create("palworld", "Local pack")
+    source = root / "user.pak"
+    source.write_bytes(b"local content")
+    imported = await import_local(settings, workspace.pack_id, source, workspace.digest)
+    assert imported.revision == 2 and len(imported.entries) == 1
+    assert str(root) not in json.dumps(imported.document())
+    source.unlink()
+    retained = local_artifact(settings, imported.entries[0].mod.file)
+    assert retained.read_bytes() == b"local content"
+    with artifact_vault(settings) as vault:
+        try:
+            vault.prune(clear=True)
+        except ModMeshError:
+            assert retained.is_file()
+        else:
+            raise AssertionError("Pinned local content was pruned")
+    unsafe = root / "unsafe.zip"
+    with zipfile.ZipFile(unsafe, "w") as archive:
+        archive.writestr("../escape.pak", b"unsafe")
+    try:
+        await import_local(settings, workspace.pack_id, unsafe, imported.digest)
+    except ModMeshError:
+        pass
+    else:
+        raise AssertionError("Unsafe local ZIP accepted")
+    retained.write_bytes(b"user changed durable blob")
+    try:
+        local_artifact(settings, imported.entries[0].mod.file)
+    except ModMeshError:
+        assert retained.read_bytes() == b"user changed durable blob"
+    else:
+        raise AssertionError("Changed retained file reused")
+
+
 def check_workspace_metadata(root: Path) -> None:
     root.mkdir(parents=True)
     with MetadataStore(root / "metadata.sqlite3") as database:
@@ -1836,6 +1875,7 @@ async def main() -> None:
     logging.disable(logging.CRITICAL)
     with TemporaryDirectory(prefix="modmesh-safety-") as name:
         check_workspace_metadata(Path(name) / "workspaces")
+        await check_workspace_import(Path(name) / "workspace-import")
         check_rule_parsing(Path(name) / "rule-parsing")
         check_rule_discovery(Path(name) / "rule-discovery")
         check_rule_installation(Path(name) / "rule-installation")

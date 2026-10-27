@@ -23,6 +23,7 @@ from modmesh.apps.desktop.rules import RulesPanel
 from modmesh.apps.desktop.search import SearchPanel
 from modmesh.apps.desktop.workers import Worker
 from modmesh.apps.desktop.workshop import WorkshopPanel
+from modmesh.apps.desktop.workspaces import WorkspacePanel
 from modmesh.apps.runtime import create_game_registry
 from modmesh.apps.server.database import Database
 from modmesh.apps.server.main import create_app
@@ -313,6 +314,18 @@ def verify():
             search_rule.close()
             custom_rule.close()
             rules.close()
+            workspace_panel = WorkspacePanel(settings, registry, start)
+            workspace_panel.set_context(installation)
+            wait()
+            workspace_panel.name.setText("GUI workspace")
+            workspace_panel.create_workspace()
+            wait()
+            assert workspace_panel.workspace is not None
+            workspace_panel.import_files((local,))
+            wait()
+            assert workspace_panel.entries.rowCount() == 1, workspace_panel.status.text()
+            assert local.exists()
+            workspace_panel.close()
             panel.server.setText("http://127.0.0.1")
             panel.select_server()
             wait()

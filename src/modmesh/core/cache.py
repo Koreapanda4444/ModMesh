@@ -158,10 +158,13 @@ class _Lease:
 
 
 class ArtifactCache:
-    def __init__(self, cache_dir: Path, *, max_bytes: int = 5 * 1024**3) -> None:
+    def __init__(
+        self, cache_dir: Path, *, max_bytes: int = 5 * 1024**3, evict: bool = True
+    ) -> None:
         if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1:
             raise ModMeshError(ErrorCode.CONFIGURATION, "Cache limit must be a positive integer")
         self.max_bytes = max_bytes
+        self.evict = evict
         self.root = cache_dir.expanduser().absolute() / "modmesh-cache-v1"
         self._closed = False
         try:
@@ -260,6 +263,10 @@ class ArtifactCache:
                         transaction.delete(namespace, key)
 
     def _remove(self, blob: _Blob) -> None:
+        if not self.evict:
+            raise ModMeshError(
+                ErrorCode.INTEGRITY, "Durable artifact changed; retained for recovery"
+            )
         if self._owned(blob):
             self._path(blob.sha).unlink()
         self._forget(blob.sha)
@@ -345,6 +352,12 @@ class ArtifactCache:
         sizes = {blob.sha: self._path(blob.sha).lstat().st_size for blob in blobs}
         size = sum(sizes.values())
         count = len(blobs)
+        if not self.evict:
+            if size > target or remove_all:
+                raise ModMeshError(
+                    ErrorCode.CONFLICT, "Durable artifact capacity reached; files retained"
+                )
+            return CacheInfo(count, size, self.max_bytes)
         for blob in sorted(blobs, key=lambda value: (value.used, value.sha)):
             if size <= target and not remove_all:
                 break

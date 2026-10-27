@@ -48,6 +48,7 @@ from modmesh.apps.desktop.search import SearchPanel
 from modmesh.apps.desktop.widgets import fill_row, table
 from modmesh.apps.desktop.workers import Worker
 from modmesh.apps.desktop.workshop import WorkshopPanel
+from modmesh.apps.desktop.workspaces import WorkspacePanel
 from modmesh.apps.library import GameLibrary
 from modmesh.apps.rules import RuleRegistration
 from modmesh.apps.runtime import create_game_registry
@@ -230,6 +231,9 @@ class MainWindow(QMainWindow):
         )
         self.pages.addWidget(self.rules_panel)
         self.navigation.addItem("게임 규칙")
+        self.workspace_panel = WorkspacePanel(settings, self.games, self.start_work)
+        self.pages.addWidget(self.workspace_panel)
+        self.navigation.addItem("팩 작업공간")
         outer.addLayout(body, 1)
         self.setCentralWidget(content)
         self.navigation.setCurrentRow(0)
@@ -452,6 +456,7 @@ class MainWindow(QMainWindow):
         self.packs_panel.set_context(record.installation if record else None)
         self.custom_panel.set_context(record.installation if record else None)
         self.workshop_panel.set_context(record.installation if record else None)
+        self.workspace_panel.set_context(record.installation if record else None)
         if record is None:
             self.game_details.setPlainText(
                 "탐지된 설치 경로가 없습니다. 게임과 OS 지원 범위를 확인하고 폴더를 등록하세요."
