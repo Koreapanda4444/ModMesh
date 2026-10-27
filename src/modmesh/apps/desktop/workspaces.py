@@ -19,9 +19,11 @@ from modmesh.apps.desktop.search import WorkStarter
 from modmesh.apps.desktop.widgets import fill_row, table
 from modmesh.apps.desktop.workers import run_async
 from modmesh.apps.workspace_artifacts import import_local
+from modmesh.apps.workspace_lifecycle import freeze_workspace
 from modmesh.core.config import ClientSettings
 from modmesh.core.games import GameCapability, GameRegistry
 from modmesh.core.packs import PackEntry
+from modmesh.core.workspace_history import PackSnapshot, WorkspaceHistory
 from modmesh.core.workspaces import Workspace, WorkspaceStore
 from modmesh.domain.models import GameInstallation
 from modmesh.storage.metadata import MetadataStore
@@ -61,6 +63,9 @@ class WorkspacePanel(QWidget):
         self.add_button = QPushButton("로컬 모드 파일 추가…")
         self.add_button.clicked.connect(self.choose_files)
         row.addWidget(self.add_button)
+        self.snapshot_button = QPushButton("잠금 버전 보존")
+        self.snapshot_button.clicked.connect(self.capture_snapshot)
+        row.addWidget(self.snapshot_button)
         layout.addLayout(row)
         self.entries = table(("모드", "파일", "출처", "크기", "사용", "버전 정책"))
         self.entries.itemSelectionChanged.connect(self.selected_entry)
@@ -164,6 +169,7 @@ class WorkspacePanel(QWidget):
         )
         self.create_button.setEnabled(self.installation is not None)
         self.add_button.setEnabled(workspace is not None and writable)
+        self.snapshot_button.setEnabled(workspace is not None and self.installation is not None)
         if workspace is not None:
             self.entries.setRowCount(len(workspace.entries))
             for index, entry in enumerate(workspace.entries):
@@ -235,6 +241,27 @@ class WorkspacePanel(QWidget):
             self.refresh(value.pack_id)
 
         self.start(work, created, self.failed, name="팩 만들기")
+
+    def capture_snapshot(self) -> None:
+        workspace, installation = self.workspace, self.installation
+        if workspace is None or installation is None:
+            return
+
+        def work(_cancelled: threading.Event) -> PackSnapshot:
+            lock = freeze_workspace(
+                self.settings, workspace.pack_id, installation, workspace.digest
+            )
+            with MetadataStore(self.settings.paths.database) as database:
+                return WorkspaceHistory(database).capture(lock)
+
+        def captured(value: object) -> None:
+            assert isinstance(value, PackSnapshot)
+            self.status.setText(
+                f"r{value.lock.workspace.revision} 잠금 버전을 보존했습니다. "
+                f"검증되지 않은 조건 {len(value.lock.warnings)}개는 그대로 표시합니다."
+            )
+
+        self.start(work, captured, self.failed, name="팩 잠금 버전 보존")
 
     def choose_files(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(

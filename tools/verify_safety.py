@@ -41,7 +41,6 @@ from modmesh.apps.rules import RuleRegistrationService
 from modmesh.apps.runtime import create_game_registry
 from modmesh.apps.workspace_artifacts import artifact_vault, import_local, local_artifact
 from modmesh.apps.workspace_lifecycle import freeze_workspace
-from modmesh.core.lockfiles import PackLock
 from modmesh.core.alternatives import find_alternatives
 from modmesh.core.artifact_matching import ArtifactCandidate
 from modmesh.core.cache import ArtifactCache
@@ -53,6 +52,7 @@ from modmesh.core.hashing import verify_file
 from modmesh.core.identity import EvidenceKind, IdentityEvidence, IdentityRegistry
 from modmesh.core.installation import InstallationManager
 from modmesh.core.local_files import copy_local
+from modmesh.core.lockfiles import PackLock
 from modmesh.core.pack_io import export_profile, read_manifest, resolve_pack, write_manifest
 from modmesh.core.pack_versions import diff_manifests, save_version, versions
 from modmesh.core.packs import PackContext, PackEntry, PackManifest, PackSetting
@@ -73,6 +73,7 @@ from modmesh.core.sources import (
     SourceDescriptor,
     SourceRegistry,
 )
+from modmesh.core.workspace_history import WorkspaceHistory
 from modmesh.core.workspaces import WorkspaceStore
 from modmesh.domain.artifacts import FileHash, HashAlgorithm
 from modmesh.domain.dependencies import Dependency, DependencyKind, DependencyTarget
@@ -1375,8 +1376,23 @@ async def check_workspace_import(root: Path) -> None:
         binary.write_bytes(b"game fixture; never launched")
     installation = create_game_registry(settings).get("palworld").inspect(game, Platform.WINDOWS)
     lock = freeze_workspace(settings, imported.pack_id, installation, imported.digest)
-    assert lock.digest == freeze_workspace(settings, imported.pack_id, installation, imported.digest).digest
+    assert (
+        lock.digest
+        == freeze_workspace(settings, imported.pack_id, installation, imported.digest).digest
+    )
     assert PackLock.loads(lock.dumps()).digest == lock.digest
+    with MetadataStore(settings.paths.database) as database:
+        history = WorkspaceHistory(database)
+        snapshot = history.capture(lock)
+        assert history.capture(lock) == snapshot
+        assert history.list(imported.pack_id) == (snapshot,)
+        try:
+            history.capture(replace(lock, context=replace(lock.context, build_id="changed")))
+        except ModMeshError:
+            pass
+        else:
+            raise AssertionError("Immutable snapshot revision changed")
+        assert history.get(lock.digest).lock.digest == lock.digest
     assert str(root).encode() not in lock.dumps() and lock.warnings
     invalid = lock.document()
     invalid["entries"] = []
