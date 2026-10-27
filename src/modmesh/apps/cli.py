@@ -17,6 +17,7 @@ from modmesh.apps.runtime import (
     source_priorities,
     source_registry,
 )
+from modmesh.apps.workspace_cli import configure_workspace_cli, workspace_command
 from modmesh.core.artifact_matching import ArtifactCandidate
 from modmesh.core.cache import ArtifactCache
 from modmesh.core.config import ClientSettings, load_client_settings
@@ -49,6 +50,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="ModMesh core commands")
     parser.add_argument("--config", type=Path)
     commands = parser.add_subparsers(dest="command", required=True)
+    configure_workspace_cli(commands)
     rules_command = commands.add_parser("rules", help="Review and explicitly approve game rules")
     rules_command.add_argument("action", choices=("list", "check", "register"))
     rules_command.add_argument("--file", type=Path)
@@ -140,6 +142,8 @@ def main() -> int:
     try:
         settings = load_client_settings(args.config)
         configure_logging(level=settings.log_level)
+        if args.command == "workspace":
+            return workspace_command(args, settings)
         if args.command == "rules":
             if args.action == "list":
                 registry_rules = load_rules(settings.paths.database)

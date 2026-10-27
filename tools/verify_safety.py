@@ -70,6 +70,7 @@ from modmesh.core.sources import (
     SourceDescriptor,
     SourceRegistry,
 )
+from modmesh.core.workspaces import WorkspaceStore
 from modmesh.domain.artifacts import FileHash, HashAlgorithm
 from modmesh.domain.dependencies import Dependency, DependencyKind, DependencyTarget
 from modmesh.domain.models import ModFile, ModVersion, Platform, SourceProject, SourceRef
@@ -1334,6 +1335,31 @@ async def check_ark(root: Path) -> None:
         raise AssertionError("Invalid Workshop ID accepted")
 
 
+def check_workspace_metadata(root: Path) -> None:
+    root.mkdir(parents=True)
+    with MetadataStore(root / "metadata.sqlite3") as database:
+        store = WorkspaceStore(database)
+        first = store.create("minecraft", "팩 A")
+        other = store.create("palworld", "다른 게임")
+        assert store.list("minecraft") == (first,)
+        renamed = store.rename(first.pack_id, "이름 변경", first.digest)
+        try:
+            store.rename(first.pack_id, "lost update", first.digest)
+        except ModMeshError:
+            pass
+        else:
+            raise AssertionError("Stale workspace edit accepted")
+        clone = store.clone(first.pack_id, "팩 B", renamed.digest)
+        assert clone.pack_id != first.pack_id and clone.revision == 1
+        database.put("workspaces.active", "installation", {"pack_id": clone.pack_id})
+        assert not store.deletion_plan(clone.pack_id).applicable
+        plan = store.deletion_plan(first.pack_id)
+        store.delete(first.pack_id, plan.fingerprint)
+        assert store.get(clone.pack_id).name == "팩 B"
+        assert database.get("workspaces.archived", first.pack_id)["name"] == "이름 변경"
+        assert store.get(other.pack_id).game_id == "palworld"
+
+
 def rule_document():
     return {
         "schema_version": 1,
@@ -1809,6 +1835,7 @@ def check_legacy_contracts(root: Path) -> None:
 async def main() -> None:
     logging.disable(logging.CRITICAL)
     with TemporaryDirectory(prefix="modmesh-safety-") as name:
+        check_workspace_metadata(Path(name) / "workspaces")
         check_rule_parsing(Path(name) / "rule-parsing")
         check_rule_discovery(Path(name) / "rule-discovery")
         check_rule_installation(Path(name) / "rule-installation")
