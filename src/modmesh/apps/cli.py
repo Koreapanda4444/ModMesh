@@ -45,6 +45,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="ModMesh core commands")
     parser.add_argument("--config", type=Path)
     commands = parser.add_subparsers(dest="command", required=True)
+    games_command = commands.add_parser("games", help="Report game capabilities and evidence")
+    games_command.add_argument("--game")
+    games_command.add_argument("--path", type=Path)
     discover = commands.add_parser("discover", help="Read-only game discovery")
     discover.add_argument("--game", help="Registered game ID")
     discover.add_argument(
@@ -114,11 +117,39 @@ def main() -> int:
         operation.add_argument("--game", required=True)
         operation.add_argument("--path", type=Path, required=True)
     args = parser.parse_args()
+    if args.command == "games" and args.path is not None and args.game is None:
+        parser.error("--path requires --game")
     if args.command == "discover" and args.path is not None and args.game is None:
         parser.error("--path requires --game")
     try:
         settings = load_client_settings(args.config)
         configure_logging(level=settings.log_level)
+        if args.command == "games":
+            registry = create_game_registry()
+            library = GameLibrary(registry, settings.paths.database)
+            context = DiscoveryContext(current_platform(), environment=os.environ)
+            adapters = (registry.get(args.game),) if args.game else registry.all()
+            print(
+                json.dumps(
+                    [
+                        {
+                            "game": asdict(adapter.game),
+                            "support": [
+                                asdict(item)
+                                for item in adapter.support(
+                                    library.inspect(adapter.game.game_id, args.path, context)
+                                    if args.path is not None
+                                    else None
+                                )
+                            ],
+                        }
+                        for adapter in adapters
+                    ],
+                    ensure_ascii=False,
+                    default=lambda item: sorted(item) if isinstance(item, frozenset) else str(item),
+                )
+            )
+            return 0
         if args.command in {"installed", "recover", "remove"}:
             games = create_game_registry()
             installation = games.get(args.game).inspect(

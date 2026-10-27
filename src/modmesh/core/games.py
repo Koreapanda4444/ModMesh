@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 
+from modmesh.core.capabilities import CapabilityEvidence, CapabilitySupport, SupportState
 from modmesh.core.capabilities import GameCapability as GameCapability
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.domain.models import Game, GameInstallation, InstalledMod, ModFile, Platform
@@ -67,6 +68,48 @@ class InstallRule:
 
 
 class GameAdapter(ABC):
+    def support(
+        self, installation: GameInstallation | None = None
+    ) -> tuple[CapabilitySupport, ...]:
+        environment = (
+            self.validate(installation) if installation is not None else EnvironmentReport()
+        )
+        result = []
+        for capability in GameCapability:
+            state = SupportState.AVAILABLE
+            message = "기존 어댑터의 기능을 사용합니다. 실게임 모드 로딩은 미검증입니다."
+            prerequisites: tuple[str, ...] = ()
+            if capability not in self.capabilities:
+                state, message = SupportState.UNSUPPORTED, "제공하지 않는 기능입니다."
+            elif installation is not None and not environment.valid:
+                state, message = SupportState.BLOCKED, "게임 환경 검사를 먼저 해결하세요."
+                prerequisites = tuple(
+                    issue.message for issue in environment.issues if issue.blocking
+                )
+            elif capability == GameCapability.WORKSHOP_HANDOFF:
+                state, message = (
+                    SupportState.HANDOFF,
+                    "구독과 파일 관리는 공식 Steam에서 진행하세요.",
+                )
+            elif capability == GameCapability.VERSION and (
+                installation is None
+                or (installation.version.value is None and installation.version.build_id is None)
+            ):
+                state, message = SupportState.UNVERIFIED, "현재 게임 버전의 근거가 부족합니다."
+            result.append(
+                CapabilitySupport(
+                    capability,
+                    state,
+                    message,
+                    prerequisites,
+                    (
+                        CapabilityEvidence("implementation", type(self).__name__, True),
+                        CapabilityEvidence("game_loading", "실제 게임에서 모드 로딩 미검증"),
+                    ),
+                )
+            )
+        return tuple(result)
+
     @property
     @abstractmethod
     def game(self) -> Game:
