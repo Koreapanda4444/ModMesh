@@ -3,23 +3,13 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
 
+from modmesh.core.capabilities import GameCapability as GameCapability
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.domain.models import Game, GameInstallation, InstalledMod, ModFile, Platform
 from modmesh.domain.validation import relative_path, require_id, require_text
-
-
-class GameCapability(StrEnum):
-    DISCOVERY = "discovery"
-    VERSION = "version"
-    MOD_DISCOVERY = "mod_discovery"
-    INSTALL_RULES = "install_rules"
-    REMOVAL_RULES = "removal_rules"
-    PROFILES = "profiles"
-    WORKSHOP_HANDOFF = "workshop_handoff"
 
 
 @dataclass(frozen=True)
