@@ -4,6 +4,7 @@ import io
 import json
 import logging
 import os
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -31,14 +32,16 @@ from modmesh.adapters.games.minecraft_mods import matches_native, read_jar, vali
 from modmesh.adapters.games.palworld import PalworldAdapter
 from modmesh.adapters.sources.custom import CustomSource
 from modmesh.adapters.sources.workshop import WorkshopSource
+from modmesh.apps.library import GameLibrary
 from modmesh.apps.operations import prepare_pack, prepare_pack_update, prepare_resolution
+from modmesh.apps.runtime import create_game_registry
 from modmesh.core.alternatives import find_alternatives
 from modmesh.core.artifact_matching import ArtifactCandidate
 from modmesh.core.cache import ArtifactCache
 from modmesh.core.config import AppPaths, ClientSettings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.downloads import DownloadManager, DownloadPolicy, DownloadResult, DownloadState
-from modmesh.core.games import GameRegistry
+from modmesh.core.games import DiscoveryContext, GameCapability, GameRegistry
 from modmesh.core.hashing import verify_file
 from modmesh.core.identity import EvidenceKind, IdentityEvidence, IdentityRegistry
 from modmesh.core.installation import InstallationManager
@@ -49,7 +52,7 @@ from modmesh.core.packs import PackContext, PackEntry, PackManifest, PackSetting
 from modmesh.core.planning import InstallationPlanner, InstallInput
 from modmesh.core.priorities import SourcePriorities
 from modmesh.core.processes import java_guard
-from modmesh.core.profiles import ProfileManager
+from modmesh.core.profiles import Profile, ProfileManager, profile_record
 from modmesh.core.removal import RemovalManager
 from modmesh.core.resolver import DependencyEdge, DependencyResolution, ResolvedMod
 from modmesh.core.sources import (
@@ -64,7 +67,9 @@ from modmesh.core.sources import (
 from modmesh.domain.artifacts import FileHash, HashAlgorithm
 from modmesh.domain.dependencies import Dependency, DependencyKind, DependencyTarget
 from modmesh.domain.models import ModFile, ModVersion, Platform, SourceProject, SourceRef
+from modmesh.domain.workspaces import ActivationTarget, PackIdentity
 from modmesh.storage.metadata import MetadataStore
+from modmesh.storage.recovery import restore_metadata
 
 DATA = b"verified bytes\x00" * 40000
 FILE = ModFile(
@@ -1322,9 +1327,72 @@ async def check_ark(root: Path) -> None:
         raise AssertionError("Invalid Workshop ID accepted")
 
 
+def check_legacy_contracts(root: Path) -> None:
+    root.mkdir(parents=True)
+    game = root / "Palworld"
+    for name in ("Palworld.exe", "Pal/Binaries/Win64/Palworld-Win64-Shipping.exe"):
+        path = game / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"fixture; not executed")
+    database = root / "metadata.sqlite3"
+    registry = create_game_registry()
+    library = GameLibrary(registry, database)
+    context = DiscoveryContext(Platform.WINDOWS, (game,), {}, root)
+    first = library.discover(context, game_id="palworld", manual=("palworld", game))
+    second = library.discover(context, game_id="palworld")
+    assert len(first.records) == len(second.records) == 1
+    identity = first.records[0].installation.installation_id
+    assert identity == second.records[0].installation.installation_id
+    assert identity == library.inspect("palworld", game, context).installation_id
+    supports = {item.capability: item for item in registry.get("ark-evolved").support()}
+    assert supports[GameCapability.WORKSHOP_HANDOFF].state.value == "handoff"
+    assert not supports[GameCapability.INSTALL_RULES].actionable
+    assert not supports[GameCapability.LAUNCH].actionable
+    assert all(
+        not item.verified
+        for item in supports[GameCapability.DISCOVERY].evidence
+        if item.scope == "game_loading"
+    )
+    assert PackIdentity.create("palworld") != PackIdentity.create("palworld")
+    assert ActivationTarget(identity, "a").target_id != ActivationTarget(identity, "b").target_id
+    legacy = profile_record(Profile("old-profile", "기존 프로필", {"edition": "steam"}))
+    with MetadataStore(database) as store:
+        store.put("profiles.items", "old-profile", legacy)
+        store.put("future.extension", "preserve", {"unknown": [1, "보존"]})
+        store.backup(root / "snapshot.sqlite3")
+        try:
+            store.backup(root / "snapshot.sqlite3")
+        except ModMeshError:
+            pass
+        else:
+            raise AssertionError("Existing backup overwritten")
+    restore_metadata(root / "snapshot.sqlite3", root / "restored.sqlite3")
+    with MetadataStore(root / "restored.sqlite3") as store:
+        assert Profile.read(store.get("profiles.items", "old-profile")).name == "기존 프로필"
+        assert store.get("future.extension", "preserve") == {"unknown": [1, "보존"]}
+        assert store.get("discovery.manual", "palworld") is not None
+    with sqlite3.connect(root / "snapshot.sqlite3") as connection:
+        connection.execute("UPDATE schema_migrations SET version=999")
+    try:
+        restore_metadata(root / "snapshot.sqlite3", root / "rejected.sqlite3")
+    except ModMeshError:
+        assert not (root / "rejected.sqlite3").exists()
+    else:
+        raise AssertionError("Future schema was restored")
+    cancelled = GameLibrary(registry, root / "cancelled/metadata.sqlite3")
+    try:
+        cancelled.discover(context, manual=("palworld", game), cancelled=lambda: True)
+    except ModMeshError as exc:
+        assert exc.code == ErrorCode.CANCELLED
+        assert not cancelled.database.exists()
+    else:
+        raise AssertionError("Cancelled discovery saved data")
+
+
 async def main() -> None:
     logging.disable(logging.CRITICAL)
     with TemporaryDirectory(prefix="modmesh-safety-") as name:
+        check_legacy_contracts(Path(name) / "legacy-contracts")
         await asyncio.wait_for(check_downloads(Path(name)), timeout=20)
         await asyncio.wait_for(check_linked_downloads(Path(name)), timeout=20)
         await asyncio.wait_for(check_cache(Path(name)), timeout=20)
