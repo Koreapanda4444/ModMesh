@@ -8,6 +8,7 @@ from dataclasses import asdict
 from functools import partial
 from pathlib import Path
 
+from modmesh.apps.library import GameLibrary
 from modmesh.apps.operations import prepare_resolution
 from modmesh.apps.runtime import (
     create_game_registry,
@@ -20,7 +21,7 @@ from modmesh.core.cache import ArtifactCache
 from modmesh.core.config import ClientSettings, load_client_settings
 from modmesh.core.conflicts import analyze_dependencies
 from modmesh.core.diagnostics import ErrorCode, ModMeshError, configure_logging, redact
-from modmesh.core.discovery import DiscoveryEngine, current_platform
+from modmesh.core.discovery import current_platform
 from modmesh.core.downloads import (
     DownloadManager,
     DownloadPolicy,
@@ -175,22 +176,20 @@ def main() -> int:
         if args.command in {"versions", "download", "resolve", "plan"}:
             return asyncio.run(_source_files(args, settings))
         context = DiscoveryContext(current_platform(), tuple(args.root), os.environ)
-        with MetadataStore(settings.paths.database) as store:
-            registry = create_game_registry()
-            engine = DiscoveryEngine(registry, store)
-            if args.path is not None:
-                engine.register_manual(args.game, args.path, context)
-            result = engine.discover(context, game_id=args.game)
-            payload = asdict(result)
-            if args.mods:
-                payload["mods"] = [
-                    asdict(mod)
-                    for record in result.records
-                    for mod in registry.get(record.installation.game_id).scan_mods(
-                        record.installation
-                    )
-                ]
-            print(json.dumps(payload, ensure_ascii=False, default=str))
+        registry = create_game_registry()
+        result = GameLibrary(registry, settings.paths.database).discover(
+            context,
+            game_id=args.game,
+            manual=(args.game, args.path) if args.path is not None else None,
+        )
+        payload = asdict(result)
+        if args.mods:
+            payload["mods"] = [
+                asdict(mod)
+                for record in result.records
+                for mod in registry.get(record.installation.game_id).scan_mods(record.installation)
+            ]
+        print(json.dumps(payload, ensure_ascii=False, default=str))
         return 0
     except ModMeshError as exc:
         print(json.dumps({"error": exc.as_dict()}, ensure_ascii=False), file=sys.stderr)

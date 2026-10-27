@@ -46,11 +46,11 @@ from modmesh.apps.desktop.search import SearchPanel
 from modmesh.apps.desktop.widgets import fill_row, table
 from modmesh.apps.desktop.workers import Worker
 from modmesh.apps.desktop.workshop import WorkshopPanel
+from modmesh.apps.library import GameLibrary
 from modmesh.apps.runtime import create_game_registry
 from modmesh.core.config import ClientSettings, ConfigurationError, load_client_settings
 from modmesh.core.diagnostics import configure_logging, install_exception_hook
 from modmesh.core.discovery import (
-    DiscoveryEngine,
     DiscoveryRecord,
     DiscoveryResult,
     current_platform,
@@ -314,11 +314,9 @@ class MainWindow(QMainWindow):
         self.discovery_status.setText("게임 경로와 환경을 확인하고 있습니다…")
 
         def work(cancelled: threading.Event) -> DiscoveryResult:
-            with MetadataStore(self.settings.paths.database) as store:
-                engine = DiscoveryEngine(self.games, store)
-                if manual is not None:
-                    engine.register_manual(manual[0], manual[1], self.context)
-                return engine.discover(self.context, cancelled=cancelled.is_set)
+            return GameLibrary(self.games, self.settings.paths.database).discover(
+                self.context, manual=manual, cancelled=cancelled.is_set
+            )
 
         self.start_work(
             work, self._discovered, self._discovery_failed, name="게임 탐색", retry=self.discover
