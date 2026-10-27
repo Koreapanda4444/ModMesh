@@ -129,6 +129,8 @@ class InstallationPlan:
             "issues": [(issue.code, issue.message, issue.path) for issue in self.issues],
             "warnings": self.warnings,
         }
+        if (self.installation.version.evidence or "").startswith("game-rule:"):
+            payload["rule_evidence"] = self.installation.version.evidence
         return hashlib.sha256(
             json.dumps(
                 payload,

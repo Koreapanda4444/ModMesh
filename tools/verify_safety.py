@@ -32,6 +32,7 @@ from modmesh.adapters.games.ark_evolved import (
 from modmesh.adapters.games.minecraft import MinecraftAdapter
 from modmesh.adapters.games.minecraft_mods import matches_native, read_jar, validate_native
 from modmesh.adapters.games.palworld import PalworldAdapter
+from modmesh.adapters.games.rule_based import RuleGameAdapter
 from modmesh.adapters.sources.custom import CustomSource
 from modmesh.adapters.sources.workshop import WorkshopSource
 from modmesh.apps.library import GameLibrary
@@ -1427,6 +1428,38 @@ def check_rule_parsing(root: Path) -> None:
             raise AssertionError("Unsafe or malformed rule was accepted")
 
 
+def check_rule_discovery(root: Path) -> None:
+    library = root / "Steam Library"
+    game = library / "steamapps/common/User Game"
+    game.mkdir(parents=True)
+    (game / "Game.exe").write_bytes(b"fixture; never executed")
+    manifest = library / "steamapps/appmanifest_123.acf"
+    manifest.write_text('"AppState" { "appid" "123" "installdir" "User Game" "buildid" "100" }')
+    document = rule_document()
+    document["store_ids"] = {"steam": "123"}
+    document["detect"]["steam_manifest_required"] = True
+    document["game_version"] = {"strategy": "steam-build"}
+    rule = parse_rule(json.dumps(document))
+    rules = RuleRegistry()
+    entry = rules.register(rule, RuleOrigin.USER, "local.json", approved_digest=rule.digest)
+    adapter = RuleGameAdapter(entry)
+    games = GameRegistry()
+    games.register(adapter)
+    context = DiscoveryContext(Platform.WINDOWS, (library,), {}, root)
+    service = GameLibrary(games, root / "metadata.sqlite3")
+    result = service.discover(context)
+    assert len(result.records) == 1 and result.records[0].installation.version.build_id == "100"
+    installation = service.inspect(rule.game_id, game, context)
+    assert installation.version.evidence.startswith("game-rule:" + rule.digest)
+    result = service.discover(context, manual=(rule.game_id, game))
+    assert result.records[0].origin == "manual"
+    assert result.records[0].installation.installation_id == installation.installation_id
+    assert adapter.inspect(game, Platform.LINUX) is None
+    manifest.write_text(manifest.read_text().replace('"appid" "123"', '"appid" "124"'))
+    assert adapter.inspect(game, Platform.WINDOWS) is None
+    assert (game / "Game.exe").read_bytes() == b"fixture; never executed"
+
+
 def check_legacy_contracts(root: Path) -> None:
     root.mkdir(parents=True)
     game = root / "Palworld"
@@ -1494,6 +1527,7 @@ async def main() -> None:
     logging.disable(logging.CRITICAL)
     with TemporaryDirectory(prefix="modmesh-safety-") as name:
         check_rule_parsing(Path(name) / "rule-parsing")
+        check_rule_discovery(Path(name) / "rule-discovery")
         check_legacy_contracts(Path(name) / "legacy-contracts")
         await asyncio.wait_for(check_downloads(Path(name)), timeout=20)
         await asyncio.wait_for(check_linked_downloads(Path(name)), timeout=20)
