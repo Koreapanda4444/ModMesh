@@ -231,6 +231,7 @@ def main() -> int:
             manual=(args.game, args.path) if args.path is not None else None,
         )
         payload = asdict(result)
+        payload["diagnostics"] = [asdict(issue.diagnostic) for issue in result.issues]
         if args.mods:
             payload["mods"] = [
                 asdict(mod)

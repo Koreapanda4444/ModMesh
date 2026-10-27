@@ -8,7 +8,7 @@ from types import MappingProxyType
 
 from modmesh.core.capabilities import CapabilityEvidence, CapabilitySupport, SupportState
 from modmesh.core.capabilities import GameCapability as GameCapability
-from modmesh.core.diagnostics import ErrorCode, ModMeshError
+from modmesh.core.diagnostics import Diagnostic, ErrorCode, ModMeshError
 from modmesh.domain.models import Game, GameInstallation, InstalledMod, ModFile, Platform
 from modmesh.domain.validation import relative_path, require_id, require_text
 
@@ -29,6 +29,10 @@ class EnvironmentIssue:
     code: str
     message: str
     blocking: bool = False
+
+    @property
+    def diagnostic(self) -> Diagnostic:
+        return Diagnostic.environment(self.code, self.message, self.blocking)
 
 
 @dataclass(frozen=True)

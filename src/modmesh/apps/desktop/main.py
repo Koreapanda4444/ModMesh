@@ -429,7 +429,12 @@ class MainWindow(QMainWindow):
             f"로더: {install.loader.name if install.loader else '미확인'}",
             f"탐지: {record.origin}",
         ]
-        details.extend(issue.message for issue in record.validation.issues)
+        details.extend(issue.diagnostic.user_message for issue in record.validation.issues)
+        details.extend(
+            f"{support.capability.value} · {support.state.value}: {support.message}"
+            for support in self.games.get(install.game_id).support(install)
+            if support.state.value != "unsupported"
+        )
         details.append("게임 실행과 실제 모드 로딩은 별도 확인이 필요합니다.")
         self.game_details.setPlainText("\n\n".join(details))
 

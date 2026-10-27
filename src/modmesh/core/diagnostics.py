@@ -1,15 +1,61 @@
+from __future__ import annotations
+
 import json
 import logging
 import re
 import sys
 import threading
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import TracebackType
 from urllib.parse import urlsplit, urlunsplit
+
+
+class SupportState(StrEnum):
+    AVAILABLE = "available"
+    UNVERIFIED = "unverified"
+    WARNING = "warning"
+    BLOCKED = "blocked"
+    HANDOFF = "handoff"
+    UNSUPPORTED = "unsupported"
+
+
+@dataclass(frozen=True)
+class Diagnostic:
+    code: str
+    state: SupportState
+    user_message: str
+    detail: str
+
+    @classmethod
+    def environment(cls, code: str, message: str, blocking: bool = False) -> Diagnostic:
+        state = SupportState.BLOCKED if blocking else SupportState.WARNING
+        if not blocking and any(word in code for word in ("unknown", "unverified", "missing")):
+            state = SupportState.UNVERIFIED
+        if not blocking and code in {"steam_managed", "manual_handoff"}:
+            state = SupportState.HANDOFF
+        messages = {
+            "unknown_version": "게임 버전을 확인하지 못했습니다.",
+            "unverified_steam_build": "Steam 빌드를 확인하지 못했습니다.",
+            "steam_managed": "구독·업데이트·제거는 Steam에서 진행하세요.",
+            "game_running": "게임을 종료한 뒤 파일 변경을 진행하세요.",
+            "process_unreadable": "게임 프로세스를 확인할 수 없습니다. 게임을 종료하세요.",
+            "unsupported_platform": "현재 운영체제에서 지원하지 않는 게임입니다.",
+            "missing_path": "등록한 게임 폴더를 찾을 수 없습니다.",
+            "manual_path_invalid": "등록한 게임 경로를 다시 확인하세요.",
+        }
+        return cls(
+            code,
+            state,
+            messages.get(
+                code, "게임 환경을 확인해야 합니다." if blocking else "추가 확인이 필요합니다."
+            ),
+            redact_text(message),
+        )
 
 
 class ErrorCode(StrEnum):

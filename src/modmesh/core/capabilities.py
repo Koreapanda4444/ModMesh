@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
+from modmesh.core.diagnostics import SupportState as SupportState
 from modmesh.domain.validation import require_text
 
 
@@ -14,14 +15,6 @@ class GameCapability(StrEnum):
     WORKSHOP_HANDOFF = "workshop_handoff"
     LAUNCH = "launch"
     SYNC = "sync"
-
-
-class SupportState(StrEnum):
-    AVAILABLE = "available"
-    UNVERIFIED = "unverified"
-    BLOCKED = "blocked"
-    HANDOFF = "handoff"
-    UNSUPPORTED = "unsupported"
 
 
 @dataclass(frozen=True)
