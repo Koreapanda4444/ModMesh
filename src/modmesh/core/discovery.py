@@ -6,7 +6,6 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from itertools import chain
 from pathlib import Path
-from uuid import NAMESPACE_URL, uuid5
 
 from modmesh.core.diagnostics import ErrorCode, ModMeshError, redact_text
 from modmesh.core.games import (
@@ -17,6 +16,7 @@ from modmesh.core.games import (
     GameRegistry,
 )
 from modmesh.domain.models import GameInstallation, Platform
+from modmesh.domain.workspaces import installation_identity
 from modmesh.storage.metadata import MetadataStore
 
 
@@ -162,9 +162,7 @@ class DiscoveryEngine:
                         existing = records.get((key, installation_key))
                         if existing is not None and existing.origin == "manual":
                             continue
-                        stable_id = str(
-                            uuid5(NAMESPACE_URL, f"modmesh:installation:{key}:{installation_key}")
-                        )
+                        stable_id = installation_identity(key, installation.path, context.platform)
                         installation = replace(installation, installation_id=stable_id)
                         record = DiscoveryRecord(
                             installation,

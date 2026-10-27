@@ -1,10 +1,12 @@
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.discovery import DiscoveryEngine, DiscoveryResult
 from modmesh.core.games import DiscoveryContext, GameRegistry
 from modmesh.domain.models import GameInstallation
+from modmesh.domain.workspaces import installation_identity
 from modmesh.storage.metadata import MetadataStore
 
 
@@ -18,7 +20,10 @@ class GameLibrary:
         installation = adapter.inspect(path.expanduser().resolve(), context.platform)
         if installation is None or not adapter.validate(installation).valid:
             raise ModMeshError(ErrorCode.VALIDATION, "Path is not a valid game installation")
-        return installation
+        return replace(
+            installation,
+            installation_id=installation_identity(game_id, installation.path, context.platform),
+        )
 
     def discover(
         self,
