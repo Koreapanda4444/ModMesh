@@ -231,7 +231,9 @@ class MainWindow(QMainWindow):
         )
         self.pages.addWidget(self.rules_panel)
         self.navigation.addItem("게임 규칙")
-        self.workspace_panel = WorkspacePanel(settings, self.games, self.start_work)
+        self.workspace_panel = WorkspacePanel(
+            settings, self.games, self.start_work, self._installation_changed
+        )
         self.pages.addWidget(self.workspace_panel)
         self.navigation.addItem("팩 작업공간")
         outer.addLayout(body, 1)
@@ -313,7 +315,13 @@ class MainWindow(QMainWindow):
     ) -> Worker:
         worker = Worker(work)
         worker.name = name
-        worker.always_start = name in {"설치 적용", "제거 적용", "팩 설치 적용"}
+        worker.always_start = name in {
+            "설치 적용",
+            "제거 적용",
+            "팩 설치 적용",
+            "팩 작업공간 적용",
+            "팩 작업공간 복구",
+        }
         if self.closing:
             worker.cancel()
         self.workers.add(worker)
@@ -332,6 +340,8 @@ class MainWindow(QMainWindow):
             "프로필 전환",
             "팩 설치 적용",
             "팩 버전 적용",
+            "팩 작업공간 적용",
+            "팩 작업공간 복구",
         }:
             self.jobs.refresh_history()
         worker.deleteLater()

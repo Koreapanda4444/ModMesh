@@ -1,23 +1,34 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from modmesh.apps.desktop.search import WorkStarter
 from modmesh.apps.desktop.widgets import fill_row, table
-from modmesh.apps.desktop.workers import run_async
+from modmesh.apps.desktop.workers import report_progress, run_async
+from modmesh.apps.workspace_activation import (
+    WorkspaceActivation,
+    apply_workspace,
+    prepare_workspace,
+    recover_workspace,
+)
 from modmesh.apps.workspace_artifacts import import_local
 from modmesh.apps.workspace_legacy import adopt_profile
 from modmesh.apps.workspace_lifecycle import freeze_workspace
@@ -26,18 +37,73 @@ from modmesh.core.games import GameCapability, GameRegistry
 from modmesh.core.packs import PackEntry
 from modmesh.core.profiles import Profile
 from modmesh.core.workspace_history import PackSnapshot, WorkspaceHistory
+from modmesh.core.workspace_receipts import ActivationReceipt
 from modmesh.core.workspaces import Workspace, WorkspaceStore
 from modmesh.domain.models import GameInstallation
 from modmesh.storage.metadata import MetadataStore
 
 
+class WorkspaceDialog(QDialog):
+    def __init__(self, prepared: WorkspaceActivation, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("팩 적용 계획")
+        self.resize(850, 610)
+        layout = QVBoxLayout(self)
+        layout.addWidget(
+            QLabel(f"{prepared.lock.workspace.name} · r{prepared.lock.workspace.revision}")
+        )
+        changes = table(("동작", "상대 경로", "크기"))
+        items = prepared.plan.changes if prepared.plan else ()
+        changes.setRowCount(len(items))
+        for row, item in enumerate(items):
+            fill_row(changes, row, (item.action, item.path, str(item.size)))
+        layout.addWidget(changes, 2)
+        notes = QTextEdit()
+        notes.setReadOnly(True)
+        notes.setPlainText(
+            "\n".join(
+                [
+                    *((item.message for item in prepared.plan.issues) if prepared.plan else ()),
+                    *prepared.lock.warnings,
+                    *(prepared.plan.warnings if prepared.plan else ()),
+                    "이미 활성화된 구성입니다."
+                    if prepared.plan is None
+                    else "게임 파일을 변경합니다.",
+                    f"승인 식별: {prepared.fingerprint}",
+                ]
+            )
+        )
+        layout.addWidget(notes, 1)
+        self.acknowledge = QCheckBox("변경 내용을 검토했고 게임을 종료했습니다.")
+        layout.addWidget(self.acknowledge)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
+        self.confirm = buttons.addButton("승인하고 적용", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.confirm.setEnabled(False)
+        self.acknowledge.toggled.connect(
+            lambda checked: self.confirm.setEnabled(checked and prepared.applicable)
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+
 class WorkspacePanel(QWidget):
-    def __init__(self, settings: ClientSettings, games: GameRegistry, start: WorkStarter) -> None:
+    def __init__(
+        self,
+        settings: ClientSettings,
+        games: GameRegistry,
+        start: WorkStarter,
+        changed: Callable[[], None] | None = None,
+    ) -> None:
         super().__init__()
         self.settings, self.games, self.start = settings, games, start
         self.installation: GameInstallation | None = None
         self.records: tuple[Workspace, ...] = ()
         self.generation = 0
+        self.changed = changed or (lambda: None)
+        self.busy = False
+        self.activation: WorkspaceActivation | None = None
+        self.dialog: WorkspaceDialog | None = None
         self.setAcceptDrops(True)
         layout = QVBoxLayout(self)
         title = QLabel("팩 작업공간")
@@ -75,6 +141,12 @@ class WorkspacePanel(QWidget):
         self.adopt_button = QPushButton("기존 프로필을 팩으로 가져오기")
         self.adopt_button.clicked.connect(self.adopt_legacy)
         row.addWidget(self.adopt_button)
+        self.preview_button = QPushButton("팩 적용 계획")
+        self.preview_button.clicked.connect(self.preview_activation)
+        row.addWidget(self.preview_button)
+        self.recover_button = QPushButton("중단된 팩 복구")
+        self.recover_button.clicked.connect(self.recover_activation)
+        row.addWidget(self.recover_button)
         layout.addLayout(row)
         self.entries = table(("모드", "파일", "출처", "크기", "사용", "버전 정책"))
         self.entries.itemSelectionChanged.connect(self.selected_entry)
@@ -118,7 +190,7 @@ class WorkspacePanel(QWidget):
         self.strategy.clear()
         self.strategy.addItem("단일 배치는 자동 선택", None)
         for button in (self.toggle, self.pin, self.recipe_button):
-            button.setEnabled(entry is not None)
+            button.setEnabled(entry is not None and not self.busy)
         if entry is None or workspace is None or installation is None:
             return
         for rule in self.games.get(installation.game_id).installation_rules(
@@ -169,16 +241,9 @@ class WorkspacePanel(QWidget):
         self.edit(recipe=True)
 
     def selected(self) -> None:
+        self.discard_activation()
         self.entries.setRowCount(0)
         workspace = self.workspace
-        writable = (
-            self.installation is not None
-            and GameCapability.INSTALL_RULES
-            in self.games.get(self.installation.game_id).capabilities
-        )
-        self.create_button.setEnabled(self.installation is not None)
-        self.add_button.setEnabled(workspace is not None and writable)
-        self.snapshot_button.setEnabled(workspace is not None and self.installation is not None)
         if workspace is not None:
             self.entries.setRowCount(len(workspace.entries))
             for index, entry in enumerate(workspace.entries):
@@ -196,10 +261,140 @@ class WorkspacePanel(QWidget):
                         else "고정",
                     ),
                 )
+        self.buttons()
+
+    def buttons(self) -> None:
+        enabled = self.installation is not None and not self.busy
+        capabilities = (
+            self.games.get(self.installation.game_id).capabilities
+            if self.installation
+            else frozenset()
+        )
+        profiles = enabled and GameCapability.PROFILES in capabilities
+        self.selection.setEnabled(not self.busy)
+        self.create_button.setEnabled(enabled)
+        self.add_button.setEnabled(
+            enabled and self.workspace is not None and GameCapability.INSTALL_RULES in capabilities
+        )
+        self.snapshot_button.setEnabled(enabled and self.workspace is not None)
+        self.adopt_button.setEnabled(enabled and self.legacy_profile.count() > 0)
+        self.preview_button.setEnabled(bool(profiles) and self.workspace is not None)
+        self.recover_button.setEnabled(bool(profiles))
         self.selected_entry()
+
+    def discard_activation(self) -> None:
+        dialog, self.dialog = self.dialog, None
+        self.activation = None
+        if dialog:
+            dialog.reject()
+
+    def preview_activation(self) -> None:
+        workspace, installation = self.workspace, self.installation
+        if workspace is None or installation is None or self.busy:
+            return
+        generation = self.generation
+        self.busy = True
+        self.buttons()
+
+        def prepared(value: object) -> None:
+            self.busy = False
+            self.buttons()
+            assert isinstance(value, WorkspaceActivation)
+            if (
+                generation != self.generation
+                or self.workspace is None
+                or self.workspace.digest != value.lock.workspace.digest
+            ):
+                return
+            self.discard_activation()
+            self.activation = value
+            self.dialog = WorkspaceDialog(value, self)
+            self.dialog.rejected.connect(self.discard_activation)
+            self.dialog.accepted.connect(self.apply_activation)
+            self.dialog.open()
+
+        self.start(
+            lambda cancelled: run_async(
+                prepare_workspace(
+                    self.settings,
+                    workspace.pack_id,
+                    installation,
+                    workspace.digest,
+                    cancelled=cancelled,
+                ),
+                cancelled,
+            ),
+            prepared,
+            self.activation_failed,
+            name="팩 적용 계획",
+        )
+
+    def apply_activation(self) -> None:
+        prepared, self.activation = self.activation, None
+        self.dialog = None
+        if prepared is None or self.busy:
+            return
+        self.busy = True
+        self.buttons()
+        generation = self.generation
+
+        def applied(value: object) -> None:
+            assert isinstance(value, ActivationReceipt)
+            self.busy = False
+            self.buttons()
+            self.changed()
+            if generation == self.generation:
+                self.refresh(value.pack_id)
+                self.status.setText(
+                    "팩 적용과 활성 잠금 기록을 저장했습니다. 게임 로딩 여부는 미검증입니다."
+                )
+
+        self.start(
+            lambda cancelled: apply_workspace(
+                self.settings,
+                prepared,
+                prepared.fingerprint,
+                cancelled=cancelled,
+                progress=report_progress,
+            ),
+            applied,
+            self.activation_failed,
+            name="팩 작업공간 적용",
+        )
+
+    def recover_activation(self) -> None:
+        installation = self.installation
+        if installation is None or self.busy:
+            return
+        self.busy = True
+        self.buttons()
+
+        def recovered(value: object) -> None:
+            assert isinstance(value, tuple)
+            self.busy = False
+            self.buttons()
+            self.changed()
+            self.status.setText(
+                "\n".join(f"{item.state}: {'; '.join(item.issues)}" for item in value)
+                or "복구할 중단 작업이 없습니다."
+            )
+
+        self.start(
+            lambda _cancelled: recover_workspace(self.settings, installation),
+            recovered,
+            self.activation_failed,
+            name="팩 작업공간 복구",
+        )
+
+    def activation_failed(self, message: str) -> None:
+        self.busy = False
+        self.buttons()
+        self.changed()
+        self.failed(message)
 
     def set_context(self, installation: GameInstallation | None) -> None:
         self.generation += 1
+        self.discard_activation()
         self.installation = installation
         self.refresh()
 
@@ -209,7 +404,7 @@ class WorkspacePanel(QWidget):
         for profile in profiles:
             self.legacy_profile.addItem(profile.name, profile.profile_id)
         self.legacy_profile.setCurrentIndex(max(0, self.legacy_profile.findData(selected)))
-        self.adopt_button.setEnabled(bool(profiles) and self.installation is not None)
+        self.buttons()
 
     def adopt_legacy(self) -> None:
         installation = self.installation
@@ -304,6 +499,8 @@ class WorkspacePanel(QWidget):
             self.import_files(tuple(Path(path) for path in paths))
 
     def import_files(self, paths: tuple[Path, ...]) -> None:
+        if self.busy:
+            return
         workspace = self.workspace
         if workspace is None or not 1 <= len(paths) <= 16:
             self.status.setText("팩을 선택하고 한 번에 1–16개 파일을 추가하세요.")

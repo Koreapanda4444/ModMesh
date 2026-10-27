@@ -18,6 +18,7 @@ from tempfile import TemporaryDirectory
 
 import httpx
 
+import modmesh.apps.workspace_activation as workspace_engine
 import modmesh.core.installation as installation_engine
 import modmesh.core.processes as processes_engine
 import modmesh.core.profiles as profile_engine
@@ -39,7 +40,12 @@ from modmesh.apps.library import GameLibrary
 from modmesh.apps.operations import prepare_pack, prepare_pack_update, prepare_resolution
 from modmesh.apps.rules import RuleRegistrationService
 from modmesh.apps.runtime import create_game_registry
-from modmesh.apps.workspace_activation import prepare_workspace
+from modmesh.apps.workspace_activation import (
+    active_workspace,
+    apply_workspace,
+    prepare_workspace,
+    recover_workspace,
+)
 from modmesh.apps.workspace_artifacts import artifact_vault, import_local, local_artifact
 from modmesh.apps.workspace_legacy import (
     activation_target,
@@ -1345,6 +1351,218 @@ async def check_ark(root: Path) -> None:
         raise AssertionError("Invalid Workshop ID accepted")
 
 
+def workspace_environment(root: Path):
+    settings = ClientSettings(AppPaths(root / "cfg", root / "data", root / "cache"))
+    installation = (
+        create_game_registry(settings).get("palworld").inspect(root / "Game", Platform.WINDOWS)
+    )
+    assert installation is not None
+    return settings, installation
+
+
+async def workspace_setup(root: Path):
+    game = root / "Game"
+    for executable in ("Palworld.exe", "Pal/Binaries/Win64/Palworld-Win64-Shipping.exe"):
+        binary = game / executable
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        binary.write_bytes(b"game fixture; never launched")
+    mods = game / "Pal/Content/Paks/~mods"
+    mods.mkdir(parents=True)
+    (mods / "external.pak").write_bytes(b"external user mod")
+    (game / "save.dat").write_bytes(b"user save")
+    settings, installation = workspace_environment(root)
+    packs = []
+    for name in ("A", "B"):
+        with MetadataStore(settings.paths.database) as database:
+            workspace = WorkspaceStore(database).create("palworld", name)
+        for filename in ("shared.pak", name + ".pak"):
+            source = root / name / filename
+            source.parent.mkdir(exist_ok=True)
+            source.write_bytes((name + filename).encode())
+            workspace = await import_local(settings, workspace.pack_id, source, workspace.digest)
+            with MetadataStore(settings.paths.database) as database:
+                workspace = WorkspaceStore(database).edit_entry(
+                    workspace.pack_id,
+                    workspace.entries[-1].mod.project.reference,
+                    workspace.digest,
+                    rule_id="palworld-pak",
+                    set_recipe=True,
+                )
+        packs.append(workspace)
+    return settings, installation, tuple(packs)
+
+
+async def workspace_crash(root: Path, mode: str) -> None:
+    settings, installation, (first, second) = await workspace_setup(root)
+    prepared = await prepare_workspace(settings, first.pack_id, installation, first.digest)
+    apply_workspace(settings, prepared, prepared.fingerprint)
+    prepared = await prepare_workspace(settings, second.pack_id, installation, second.digest)
+    publish = profile_engine.publish_file
+
+    def interrupt(temporary: Path, destination: Path) -> None:
+        if mode == "after":
+            publish(temporary, destination)
+        os._exit(77)
+
+    def interrupt_receipt(*args, **kwargs):
+        os._exit(77)
+
+    if mode in {"before", "after"}:
+        profile_engine.publish_file = interrupt
+    elif mode == "prepared":
+        profile_engine.ProfileManager.switch = interrupt_receipt
+    else:
+        workspace_engine._finish_activation = interrupt_receipt
+    apply_workspace(settings, prepared, prepared.fingerprint)
+
+
+async def check_workspace_activation(root: Path) -> None:
+    settings, installation, (first, second) = await workspace_setup(root)
+    mods = installation.path / "Pal/Content/Paks/~mods"
+    assert active_workspace(settings, installation)["state"] == "none"
+    receipts = []
+    for workspace in (first, second, first):
+        prepared = await prepare_workspace(
+            settings, workspace.pack_id, installation, workspace.digest
+        )
+        receipt = apply_workspace(settings, prepared, prepared.fingerprint)
+        assert receipt.lock_digest == prepared.lock.digest
+        receipts.append(receipt.document())
+        assert (mods / "shared.pak").read_bytes() == (workspace.name + "shared.pak").encode()
+        assert (mods / "A.pak").exists() == (workspace.name == "A")
+        assert (mods / "B.pak").exists() == (workspace.name == "B")
+        assert (mods / "external.pak").read_bytes() == b"external user mod"
+        assert (installation.path / "save.dat").read_bytes() == b"user save"
+        assert active_workspace(settings, installation)["receipt"] == receipt.document()
+        assert active_workspace(settings, installation)["state"] == "active"
+    with MetadataStore(settings.paths.database) as database:
+        for receipt in receipts:
+            assert database.get("workspaces.receipts", receipt["operation_id"]) == receipt
+        assert not WorkspaceStore(database).deletion_plan(first.pack_id).applicable
+    prepared = await prepare_workspace(settings, first.pack_id, installation, first.digest)
+    assert prepared.plan is None
+    apply_workspace(settings, prepared, prepared.fingerprint)
+    assert not recover_workspace(settings, installation)
+    prepared = await prepare_workspace(settings, second.pack_id, installation, second.digest)
+    previous = active_workspace(settings, installation)["receipt"]
+    try:
+        apply_workspace(settings, prepared, "wrong approval")
+    except ModMeshError:
+        pass
+    else:
+        raise AssertionError("Pack accepted a different approval")
+    cancelled = threading.Event()
+    try:
+        apply_workspace(
+            settings,
+            prepared,
+            prepared.fingerprint,
+            cancelled=cancelled,
+            progress=lambda event: cancelled.set(),
+        )
+    except ModMeshError as exc:
+        assert exc.details["recovery"] == "rolled_back", exc.as_dict()
+    else:
+        raise AssertionError("Cancelled pack activation committed")
+    assert active_workspace(settings, installation)["receipt"] == previous
+    assert (mods / "shared.pak").read_bytes() == b"Ashared.pak"
+    prepared = await prepare_workspace(settings, second.pack_id, installation, second.digest)
+    publish = profile_engine.publish_file
+
+    def fail_once(temporary: Path, destination: Path) -> None:
+        publish(temporary, destination)
+        raise OSError("simulated partial publish failure")
+
+    profile_engine.publish_file = fail_once
+    try:
+        try:
+            apply_workspace(settings, prepared, prepared.fingerprint)
+        except ModMeshError as exc:
+            assert exc.details["recovery"] == "rolled_back", exc.as_dict()
+        else:
+            raise AssertionError("Partial publish failure committed")
+    finally:
+        profile_engine.publish_file = publish
+    assert (mods / "shared.pak").read_bytes() == b"Ashared.pak"
+    assert active_workspace(settings, installation)["receipt"] == previous
+    prepared = await prepare_workspace(settings, second.pack_id, installation, second.digest)
+    with MetadataStore(settings.paths.database) as database:
+        empty = WorkspaceStore(database).create("palworld", "Original empty pack")
+    for workspace in (empty, first):
+        transition = await prepare_workspace(
+            settings, workspace.pack_id, installation, workspace.digest
+        )
+        cleanup = profile_engine.ProfileManager._cleanup
+
+        def fail_cleanup(*args, **kwargs):
+            raise OSError("simulated cleanup failure after durable commit")
+
+        if workspace == empty:
+            profile_engine.ProfileManager._cleanup = fail_cleanup
+        try:
+            apply_workspace(settings, transition, transition.fingerprint)
+        finally:
+            profile_engine.ProfileManager._cleanup = cleanup
+        assert (mods / "shared.pak").exists() == (workspace == first)
+        assert (mods / "external.pak").read_bytes() == b"external user mod"
+        assert (installation.path / "save.dat").read_bytes() == b"user save"
+    prepared = await prepare_workspace(settings, second.pack_id, installation, second.digest)
+    (mods / "shared.pak").write_bytes(b"user edited managed file")
+    try:
+        apply_workspace(settings, prepared, prepared.fingerprint)
+    except ModMeshError:
+        pass
+    else:
+        raise AssertionError("Edited user content was replaced")
+    assert (mods / "shared.pak").read_bytes() == b"user edited managed file"
+    assert active_workspace(settings, installation)["state"] == "unverified"
+    for mode in ("prepared", "before", "after", "receipt", "changed"):
+        crashed = root.parent / ("workspace-crash-" + mode)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "--workspace-crash",
+                str(crashed),
+                "after" if mode == "changed" else mode,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert result.returncode == 77, result.stderr
+        recovered_settings, recovered_installation = workspace_environment(crashed)
+        recovered_mods = recovered_installation.path / "Pal/Content/Paks/~mods"
+        if mode == "changed":
+            (recovered_mods / "B.pak").write_bytes(b"user edit after crash")
+        assert (
+            active_workspace(recovered_settings, recovered_installation)["state"]
+            == "recovery_required"
+        )
+        recovered = recover_workspace(recovered_settings, recovered_installation)
+        expected = (
+            "committed"
+            if mode == "receipt"
+            else "aborted"
+            if mode == "prepared"
+            else "recovery_required"
+            if mode == "changed"
+            else "rolled_back"
+        )
+        assert recovered and recovered[0].state == expected, (mode, expected, recovered)
+        if mode == "changed":
+            assert (recovered_mods / "B.pak").read_bytes() == b"user edit after crash"
+        else:
+            assert (recovered_mods / "shared.pak").read_bytes() == (
+                b"Bshared.pak" if mode == "receipt" else b"Ashared.pak"
+            )
+            assert active_workspace(recovered_settings, recovered_installation)["state"] == "active"
+            assert not recover_workspace(recovered_settings, recovered_installation)
+        assert (recovered_mods / "external.pak").read_bytes() == b"external user mod"
+        assert (recovered_installation.path / "save.dat").read_bytes() == b"user save"
+
+
 async def check_workspace_import(root: Path) -> None:
     root.mkdir(parents=True)
     settings = ClientSettings(AppPaths(root / "cfg", root / "data", root / "cache"))
@@ -1980,6 +2198,7 @@ async def main() -> None:
         check_workspace_metadata(Path(name) / "workspaces")
         check_workspace_legacy(Path(name) / "workspace-legacy")
         await check_workspace_import(Path(name) / "workspace-import")
+        await check_workspace_activation(Path(name) / "workspace-activation")
         check_rule_parsing(Path(name) / "rule-parsing")
         check_rule_discovery(Path(name) / "rule-discovery")
         check_rule_installation(Path(name) / "rule-installation")
@@ -2009,6 +2228,8 @@ if __name__ == "__main__":
         removal_crash(Path(sys.argv[2]), sys.argv[3])
     elif len(sys.argv) == 4 and sys.argv[1] == "--profile-crash":
         profile_crash(Path(sys.argv[2]), sys.argv[3])
+    elif len(sys.argv) == 4 and sys.argv[1] == "--workspace-crash":
+        asyncio.run(workspace_crash(Path(sys.argv[2]), sys.argv[3]))
     elif len(sys.argv) == 3 and sys.argv[1] == "--cache-worker":
         asyncio.run(cache_worker(Path(sys.argv[2])))
     else:

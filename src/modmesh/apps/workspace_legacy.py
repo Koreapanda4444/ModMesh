@@ -15,10 +15,14 @@ def profile_configuration_digest(profile: Profile) -> str:
     record = profile_record(profile)
     record.pop("profile_id")
     record.pop("name")
-    record["mods"] = [
-        {key: value for key, value in object_record(raw).items() if key != "operation_id"}
-        for raw in array_record(record["mods"])
-    ]
+    record["mods"] = sorted(
+        [
+            {key: value for key, value in object_record(raw).items() if key != "operation_id"}
+            for raw in array_record(record["mods"])
+        ],
+        key=document_digest,
+    )
+    record["files"] = sorted(array_record(record["files"]), key=document_digest)
     return document_digest(record)
 
 

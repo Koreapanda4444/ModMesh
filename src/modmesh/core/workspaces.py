@@ -294,9 +294,19 @@ class WorkspaceStore:
             self.get(pack_id),
             tuple(
                 key
-                for key, receipt in self.database.list("workspaces.active")
+                for key, receipt in self._activation_references()
                 if receipt.get("pack_id") == pack_id
             ),
+        )
+
+    def _activation_references(self) -> tuple[tuple[str, dict[str, object]], ...]:
+        return tuple(
+            self.database.list("workspaces.active")
+            + [
+                (key, object_record(record.get("receipt")))
+                for key, record in self.database.list("workspaces.operations")
+                if record.get("state") not in {"committed", "rolled_back", "aborted", "superseded"}
+            ]
         )
 
     def delete(self, pack_id: str, approval: str) -> None:
@@ -307,6 +317,12 @@ class WorkspaceStore:
                 tuple(
                     key
                     for key, receipt in transaction.list("workspaces.active")
+                    + [
+                        (key, object_record(record.get("receipt")))
+                        for key, record in transaction.list("workspaces.operations")
+                        if record.get("state")
+                        not in {"committed", "rolled_back", "aborted", "superseded"}
+                    ]
                     if receipt.get("pack_id") == pack_id
                 ),
             )

@@ -692,6 +692,11 @@ class InstallationManager:
                     withdrawn.unlink()
                 before_value = step.get("before")
                 if before_value is None:
+                    if target.exists():
+                        raise ModMeshError(
+                            ErrorCode.CONFLICT,
+                            "Changed new target was preserved; manual recovery required",
+                        )
                     continue
                 before = object_record(before_value)
                 moved = self._slot(operation, "moved", index)

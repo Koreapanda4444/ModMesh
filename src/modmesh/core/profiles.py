@@ -5,7 +5,8 @@ import io
 import json
 import os
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -607,6 +608,22 @@ class ProfileManager(RemovalManager):
             store.put("profiles.items", profile.profile_id, profile_record(profile))
             return self._switch_plan(store, profile.profile_id)
 
+    @contextmanager
+    def verified_active(self, identity: str) -> Iterator[Profile]:
+        with self._locked() as store:
+            if store is None:
+                raise ModMeshError(ErrorCode.NOT_FOUND, "Profile state is unavailable")
+            self._ready(store)
+            if self._active(store) != identity:
+                raise ModMeshError(ErrorCode.CONFLICT, "A different profile is active")
+            current = self._get(store, identity)
+            yield self._capture(
+                store,
+                identity,
+                current.name,
+                tuple(item.path for item in current.files if item.setting),
+            )
+
     def plan_switch(self, identity: str) -> ProfilePlan:
         with self._locked(create=True) as store:
             assert store is not None
@@ -763,8 +780,6 @@ class ProfileManager(RemovalManager):
                     transaction.put("profiles.state", "active", {"id": plan.target.profile_id})
                     record["state"] = "committed"
                     transaction.put("install.operations", operation_id, record)
-                self._cleanup(store, record)
-                return OperationResult(operation_id, "committed")
             except Exception as exc:
                 result = self._rollback(store, record)
                 raise ModMeshError(
@@ -772,3 +787,10 @@ class ProfileManager(RemovalManager):
                     str(exc),
                     details={"recovery": result.state, "operation_id": operation_id},
                 ) from exc
+            try:
+                self._cleanup(store, record)
+            except (OSError, ModMeshError):
+                return OperationResult(
+                    operation_id, "committed", ("Temporary file cleanup incomplete",)
+                )
+            return OperationResult(operation_id, "committed")

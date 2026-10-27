@@ -69,7 +69,21 @@ Minecraft 다중 출처는 선택 인스턴스의 게임 버전·로더로 조�
 
 내장 게임 외에 선언형 JSON 규칙으로 게임을 추가할 수 있습니다. 데스크톱의 **게임 규칙**에서 게임·모드 폴더·로더·실행 정의를 입력해 JSON을 만들거나 불러오고, 변경 없이 검사한 뒤 명시적으로 승인합니다. CLI는 `modmesh-cli rules check --file game.json`이 반환한 해시를 `rules register --file game.json --approve SHA256`에 전달합니다. 경로를 함께 등록하려면 두 명령에 `--path <게임 폴더>`를 지정합니다. 개정 업데이트는 더 큰 revision과 `--previous PREVIOUS_SHA256`이 필요합니다. `rules list`와 `games`에서 출처·승인 상태와 기능별 지원을 확인합니다. [규칙 계약과 사용법](docs/game-rules.md)을 참고하세요.
 
-규칙 기반 파일/ZIP/경로 매핑과 BepInEx·UE4SS 배치는 기존 승인·파일 보호·제거·프로필 엔진을 사용합니다. 로더는 별도 설치가 필요합니다. 내장 게임 덮어쓰기와 위험 경로·명령을 거부하며, 잘못 저장된 규칙은 원본을 보존하고 탐색 진단에 표시합니다. **실행 정의는 현재 저장·검증만 하며 게임 실행 기능은 아직 제공하지 않습니다.** 새로운 독립 팩 workspace·잠금 파일·동기화·Play 통합은 이후 단계입니다.
+규칙 기반 파일/ZIP/경로 매핑과 BepInEx·UE4SS 배치는 기존 승인·파일 보호·제거·프로필 엔진을 사용합니다. 로더는 별도 설치가 필요합니다. 내장 게임 덮어쓰기와 위험 경로·명령을 거부하며, 잘못 저장된 규칙은 원본을 보존하고 탐색 진단에 표시합니다. **실행 정의는 현재 저장·검증만 하며 게임 실행 기능은 아직 제공하지 않습니다.** 동기화·Play 통합은 이후 단계입니다.
+
+**팩 작업공간**에서 독립 팩을 만들고 ZIP/JAR/DLL/Pak 파일을 추가해 사용 여부·버전 고정 정책·설치 규칙을 편집합니다. 파일 추가는 검증한 사본을 보존하며 원본과 게임 폴더를 변경하지 않습니다. **팩 적용 계획**에서 변경과 경고를 확인하고 승인하면 기존 프로필 트랜잭션 엔진으로 전환합니다. 팩마다 정확한 활성 잠금 파일과 적용 기록을 남기며, 파일 변경 중단은 원래 구성으로 복구하고 파일 전환 후 기록 저장만 중단됐다면 실제 활성 파일을 확인해 기록을 완성합니다. 사용자 수정 파일은 보존하고 확인할 수 없으면 `recovery_required`로 남깁니다. 데스크톱의 **중단된 팩 복구** 또는 아래 CLI로 재시도합니다. 기존 Profile/Manifest schema 1 데이터는 원본을 유지하며 가져올 수 있습니다.
+
+```powershell
+modmesh-cli workspace create --game palworld --name "My pack"
+modmesh-cli workspace import --id PACK_ID --file ./mod.pak --expected WORKSPACE_DIGEST
+modmesh-cli workspace recipe --id PACK_ID --source local --project PROJECT_ID --rule palworld-pak --expected WORKSPACE_DIGEST
+modmesh-cli workspace plan --id PACK_ID --path "D:/Games/Palworld" --expected WORKSPACE_DIGEST
+modmesh-cli workspace apply --id PACK_ID --path "D:/Games/Palworld" --expected WORKSPACE_DIGEST --approve PLAN_FINGERPRINT
+modmesh-cli workspace active --game palworld --path "D:/Games/Palworld"
+modmesh-cli workspace recover --game palworld --path "D:/Games/Palworld"
+```
+
+각 편집 결과의 최신 `digest`를 다음 `--expected`에 사용합니다. `plan`은 게임 파일을 변경하지 않고 비활성 프로필 사본을 준비하며, `apply`는 같은 계획을 다시 검증합니다. `active`는 실제 프로필·파일과 기록이 모두 맞을 때만 `active`를 반환합니다. 활성 팩이나 복구 대기 팩은 삭제할 수 없습니다. `workspace lock`, `snapshot`, `history`, `snapshot-show`로 정확한 버전과 불변 이력을 조회합니다. 로컬 사본 또는 검증 캐시·보존된 프로필에 정확한 파일이 있어야 적용할 수 있으며 원격 파일 자동 확보는 아직 연결하지 않았습니다. 외부 모드는 공유되고 세이브는 보존되며, 의존성·호환성 미확인과 실제 게임 로딩 미검증은 계속 표시합니다.
 
 클라이언트는 `--config <TOML>` 또는 `MODMESH_CONFIG`로 설정을 지정합니다. 기본 파일은 `%APPDATA%/ModMesh/config.toml`이며, 없으면 기본값을 사용합니다. `[client]`에는 `data_dir`, `cache_dir`, `cache_max_bytes`, `server_url`, `log_level`과 `source_priorities`를 지정할 수 있습니다. `MODMESH_DATA_DIR`, `MODMESH_CACHE_DIR`, `MODMESH_CACHE_MAX_BYTES`, `MODMESH_SERVER_URL`, `MODMESH_LOG_LEVEL` 환경 변수가 우선합니다.
 

@@ -8,7 +8,12 @@ from pathlib import Path
 
 from modmesh.apps.library import GameLibrary
 from modmesh.apps.runtime import create_game_registry
-from modmesh.apps.workspace_activation import prepare_workspace
+from modmesh.apps.workspace_activation import (
+    active_workspace,
+    apply_workspace,
+    prepare_workspace,
+    recover_workspace,
+)
 from modmesh.apps.workspace_artifacts import import_local
 from modmesh.apps.workspace_legacy import adopt_profile, import_manifest_workspace
 from modmesh.apps.workspace_lifecycle import freeze_workspace, write_lock
@@ -50,13 +55,16 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
             "adopt-profile",
             "import-manifest",
             "plan",
+            "apply",
+            "active",
+            "recover",
         ),
     )
     parser.add_argument("--game")
     parser.add_argument("--id", dest="pack_id")
     parser.add_argument("--name")
     parser.add_argument("--expected", help="Workspace digest returned by show")
-    parser.add_argument("--approve", help="Exact deletion plan fingerprint")
+    parser.add_argument("--approve", help="Exact deletion or activation plan fingerprint")
     parser.add_argument("--file", type=Path)
     parser.add_argument("--source")
     parser.add_argument("--project")
@@ -70,7 +78,20 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
 
 
 def workspace_command(args: argparse.Namespace, settings: ClientSettings) -> int:
-    if args.action == "plan":
+    if args.action in {"active", "recover"}:
+        if not args.game or args.path is None:
+            raise ModMeshError(ErrorCode.VALIDATION, "Select --game and --path")
+        installation = GameLibrary(create_game_registry(settings), settings.paths.database).inspect(
+            args.game, args.path, DiscoveryContext(current_platform())
+        )
+        if args.action == "recover":
+            recovered = recover_workspace(settings, installation)
+            print(json.dumps([asdict(item) for item in recovered], ensure_ascii=False))
+            return int(any(item.state == "recovery_required" for item in recovered))
+        status = active_workspace(settings, installation)
+        print(json.dumps(status, ensure_ascii=False))
+        return int(status["state"] not in {"none", "active"})
+    if args.action in {"plan", "apply"}:
         if not args.pack_id or args.path is None or not args.expected:
             raise ModMeshError(
                 ErrorCode.VALIDATION, "Activation plan needs --id, --path and --expected"
@@ -83,6 +104,14 @@ def workspace_command(args: argparse.Namespace, settings: ClientSettings) -> int
         prepared = asyncio.run(
             prepare_workspace(settings, args.pack_id, installation, args.expected)
         )
+        if args.action == "apply":
+            receipt = apply_workspace(settings, prepared, args.approve or "")
+            print(
+                json.dumps(
+                    {"state": "committed", "receipt": receipt.document()}, ensure_ascii=False
+                )
+            )
+            return 0
         print(json.dumps(prepared.document(), ensure_ascii=False))
         return 0 if prepared.applicable else 1
     if args.action in {"adopt-profile", "import-manifest"}:
