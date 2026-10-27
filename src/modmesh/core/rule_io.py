@@ -247,6 +247,15 @@ def _parse(value: object) -> GameRule:
         raise _fail("Loader strategy requires explicit marker paths")
     if loader.strategy == LoaderKind.NONE and loader.markers:
         raise _fail("A rule without a loader cannot declare loader markers")
+    marker_names = {
+        LoaderKind.BEPINEX: {"bepinex.dll", "bepinex.core.dll"},
+        LoaderKind.UE4SS: {"ue4ss.dll"},
+    }
+    if loader.strategy in marker_names and any(
+        PurePosixPath(marker).name.casefold() not in marker_names[loader.strategy]
+        for marker in loader.markers
+    ):
+        raise _fail("Loader markers must name the known loader DLL")
     roots = []
     for raw in _array(data["mod_roots"], 16):
         root_data = _fields(raw, "root_id path layout", "root_id path layout")
@@ -320,6 +329,18 @@ def _parse(value: object) -> GameRule:
             raise _fail("Overlapping source mappings are ambiguous")
         if kind == InstallStrategyKind.PLUGIN and loader.strategy == LoaderKind.NONE:
             raise _fail("Plugin placement requires a loader strategy")
+        if (
+            kind == InstallStrategyKind.PLUGIN
+            and loader.strategy == LoaderKind.BEPINEX
+            and ".dll" not in extensions
+        ):
+            raise _fail("BepInEx plugin strategy must permit DLL files")
+        if (
+            kind == InstallStrategyKind.PLUGIN
+            and loader.strategy == LoaderKind.UE4SS
+            and (".txt" not in extensions or not {".lua", ".dll"} & set(extensions))
+        ):
+            raise _fail("UE4SS plugins need a script/DLL and an enabled.txt marker")
         strategies.append(
             InstallStrategyRule(
                 _identifier(item["strategy_id"]), kind, root_id, extensions, tuple(mappings)

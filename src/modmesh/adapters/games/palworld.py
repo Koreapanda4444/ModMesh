@@ -3,6 +3,7 @@ from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
 from modmesh.adapters.games.steam import read_appmanifest, steam_installations
+from modmesh.adapters.loaders import ue4ss_auxiliary, ue4ss_payload
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.games import (
     DiscoveryContext,
@@ -161,23 +162,7 @@ class PalworldAdapter(GameAdapter):
         issues = []
         folded = {path.casefold() for path in paths}
         if rule.rule_id == "palworld-ue4ss":
-            issues.append(
-                EnvironmentIssue(
-                    "ue4ss_order", "enabled.txt activation does not configure UE4SS load ordering"
-                )
-            )
-            roots = {path.split("/")[0] for path in folded}
-            for root in roots:
-                if not any(
-                    f"{root}/{marker}" in folded for marker in ("scripts/main.lua", "dlls/main.dll")
-                ):
-                    issues.append(
-                        EnvironmentIssue(
-                            "ue4ss_layout",
-                            "UE4SS mods need Scripts/main.lua or dlls/main.dll in a mod directory",
-                            True,
-                        )
-                    )
+            return ue4ss_payload(paths)
         else:
             if any("/" in path for path in paths):
                 issues.append(
@@ -206,13 +191,7 @@ class PalworldAdapter(GameAdapter):
     ) -> dict[str, bytes]:
         if rule.rule_id != "palworld-ue4ss":
             return {}
-        folded = {path.casefold() for path in paths}
-        roots = {path.split("/")[0] for path in paths}
-        return {
-            root + "/enabled.txt": b""
-            for root in roots
-            if root.casefold() + "/enabled.txt" not in folded
-        }
+        return ue4ss_auxiliary(paths)
 
     def scan_mods(self, installation: GameInstallation) -> tuple[InstalledMod, ...]:
         if not self.validate(installation).valid:

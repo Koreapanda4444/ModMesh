@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
 from modmesh.adapters.games.minecraft_mods import JarMetadata, read_jar, validate_native
+from modmesh.adapters.loaders import MinecraftArtifactInspector
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.games import (
     DiscoveryContext,
@@ -402,27 +403,8 @@ class MinecraftAdapter(GameAdapter):
             )
         excluded = frozenset(("mods/" + file.filename).casefold() for file, _ in files)
         jars, warnings = self._jars(installation, excluded)
-        selected = []
-        issues = list(warnings)
-        for file, path in files:
-            try:
-                metadata = read_jar(path, loader.name)
-                if (
-                    loader.name == "neoforge"
-                    and metadata.metadata_file != "META-INF/neoforge.mods.toml"
-                    and not (loader.version or "").startswith("20.4.")
-                ):
-                    raise ModMeshError(
-                        ErrorCode.UNSUPPORTED, "This NeoForge version requires neoforge.mods.toml"
-                    )
-                selected.append(("mods/" + file.filename, metadata))
-            except ModMeshError as exc:
-                issues.append(
-                    EnvironmentIssue("invalid_mod_jar", f"{file.filename}: {exc.message}", True)
-                )
-        return EnvironmentReport(
-            (*issues, *validate_native(installation, (*jars, *selected)).issues)
-        )
+        report = MinecraftArtifactInspector().inspect(installation, files, existing=jars)
+        return EnvironmentReport((*warnings, *report.issues))
 
     def validate_removal(
         self,

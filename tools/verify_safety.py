@@ -1538,6 +1538,75 @@ def check_rule_installation(root: Path) -> None:
                 raise AssertionError("Unmapped archive content accepted")
 
 
+def check_rule_loaders(root: Path) -> None:
+    for loader in ("bepinex", "ue4ss"):
+        directory = root / loader
+        game = directory / "Game"
+        game.mkdir(parents=True)
+        (game / "Game.exe").write_bytes(b"game fixture")
+        document = rule_document()
+        marker = "BepInEx/core/BepInEx.dll" if loader == "bepinex" else "ue4ss/UE4SS.dll"
+        document["loader"] = {"strategy": loader, "markers": [marker]}
+        document["mod_roots"][0].update(
+            path="BepInEx/plugins" if loader == "bepinex" else "ue4ss/Mods", layout=loader
+        )
+        document["install_strategies"][0].update(
+            kind="plugin", extensions=[".dll"] if loader == "bepinex" else [".lua", ".dll", ".txt"]
+        )
+        rule = parse_rule(json.dumps(document))
+        registry = RuleRegistry()
+        adapter = RuleGameAdapter(
+            registry.register(rule, RuleOrigin.USER, "local.json", approved_digest=rule.digest)
+        )
+        without_loader = adapter.inspect(game, Platform.WINDOWS)
+        assert without_loader is not None and without_loader.loader is None
+        assert not adapter.validate_operation(without_loader).valid
+        (game / marker).parent.mkdir(parents=True)
+        (game / marker).write_bytes(b"loader presence fixture; not executed")
+        installation = adapter.inspect(game, Platform.WINDOWS)
+        assert installation.loader.name == loader and installation.loader.version is None
+        artifact = directory / ("plugin.dll" if loader == "bepinex" else "plugin.zip")
+        if loader == "bepinex":
+            header = bytearray(68)
+            header[:2] = b"MZ"
+            header[60:64] = (64).to_bytes(4, "little")
+            header[64:] = b"PE\x00\x00"
+            artifact.write_bytes(header)
+        else:
+            with zipfile.ZipFile(artifact, "w") as archive:
+                archive.writestr("MyMod/Scripts/main.lua", "return")
+        reference = SourceRef("custom", loader)
+        file = ModFile(
+            reference,
+            "plugin",
+            artifact.name,
+            artifact.stat().st_size,
+            hashes=(verify_file(artifact).sha256,),
+        )
+        version = ModVersion(reference, "1", "1", files=(file,), dependencies_known=True)
+        mod = ResolvedMod(SourceProject(reference, rule.game_id, "Plugin"), version, file, True)
+        resolution = DependencyResolution(rule.game_id, None, loader, (mod,), ())
+        games = GameRegistry()
+        games.register(adapter)
+        manager = RemovalManager(games, installation)
+        plan = manager.plan(resolution, (InstallInput(mod, artifact),))
+        assert plan.applicable, plan.issues
+        assert manager.apply(plan, plan.fingerprint).state == "committed"
+        if loader == "ue4ss":
+            assert (game / "ue4ss/Mods/MyMod/enabled.txt").read_bytes() == b""
+            assert not adapter.loader_strategy.payload(("Wrong/init.lua",)).valid
+        else:
+            bad = directory / "bad.dll"
+            bad.write_bytes(b"not a DLL")
+            assert not adapter.validate_artifacts(
+                installation, ((replace(file, filename="bad.dll"), bad),)
+            ).valid
+        removal = manager.plan_removal((reference,))
+        assert removal.applicable, removal.issues
+        assert manager.remove(removal, removal.fingerprint).state == "committed"
+        assert (game / marker).read_bytes() == b"loader presence fixture; not executed"
+
+
 def check_legacy_contracts(root: Path) -> None:
     root.mkdir(parents=True)
     game = root / "Palworld"
@@ -1607,6 +1676,7 @@ async def main() -> None:
         check_rule_parsing(Path(name) / "rule-parsing")
         check_rule_discovery(Path(name) / "rule-discovery")
         check_rule_installation(Path(name) / "rule-installation")
+        check_rule_loaders(Path(name) / "rule-loaders")
         check_legacy_contracts(Path(name) / "legacy-contracts")
         await asyncio.wait_for(check_downloads(Path(name)), timeout=20)
         await asyncio.wait_for(check_linked_downloads(Path(name)), timeout=20)

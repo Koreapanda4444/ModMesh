@@ -4,6 +4,7 @@ from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
 from modmesh.adapters.games.steam import read_appmanifest, steam_installations
+from modmesh.adapters.loaders import standard_loaders
 from modmesh.core.capabilities import CapabilityEvidence, CapabilitySupport, SupportState
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.game_rules import InstallStrategyKind
@@ -36,6 +37,7 @@ class RuleGameAdapter(GameAdapter):
         self.entry = entry
         self.rule = entry.rule
         self.strategies = InstallationStrategyRegistry.standard()
+        self.loader_strategy = standard_loaders().get(self.rule.loader.strategy)
         self._game = Game(
             self.rule.game_id, self.rule.name, (self.rule.edition,), frozenset(self.rule.platforms)
         )
@@ -100,6 +102,7 @@ class RuleGameAdapter(GameAdapter):
                 self.rule.edition,
                 platform,
                 GameVersion(build_id=build_id, evidence=evidence),
+                self.loader_strategy.detect(root, self.rule.loader),
             )
         except (OSError, ModMeshError):
             return None
@@ -138,6 +141,12 @@ class RuleGameAdapter(GameAdapter):
                     "rule_unapproved", "Approve the game rule before changing files", True
                 )
             )
+        if self._loader_required and installation.loader is None:
+            issues.append(
+                EnvironmentIssue(
+                    "loader_missing", "Install and verify the required loader separately", True
+                )
+            )
         executables = [
             name for name in self.rule.detect.required_files if name.lower().endswith(".exe")
         ]
@@ -155,6 +164,14 @@ class RuleGameAdapter(GameAdapter):
                     )
                 )
         return EnvironmentReport(tuple(issues))
+
+    @property
+    def _loader_required(self) -> bool:
+        kinds = {item.kind for item in self.rule.install_strategies}
+        return InstallStrategyKind.PLUGIN in kinds and kinds <= {
+            InstallStrategyKind.PLUGIN,
+            InstallStrategyKind.READONLY,
+        }
 
     def support(
         self, installation: GameInstallation | None = None
@@ -180,6 +197,15 @@ class RuleGameAdapter(GameAdapter):
                 message = "규칙 기반 기능입니다. 실게임 모드 로딩은 미검증입니다."
             if report.capability in self.rule.capabilities and not self.entry.approved:
                 message, state = "규칙 내용을 먼저 승인하세요.", SupportState.BLOCKED
+            elif (
+                report.capability in {GameCapability.INSTALL_RULES, GameCapability.PROFILES}
+                and self._loader_required
+                and (installation is None or installation.loader is None)
+            ):
+                message, state = (
+                    "필요한 로더를 별도로 설치하고 다시 확인하세요.",
+                    SupportState.BLOCKED,
+                )
             result.append(replace(report, message=message, state=state, evidence=evidence))
         return tuple(result)
 
@@ -279,6 +305,31 @@ class RuleGameAdapter(GameAdapter):
         replaced: frozenset[str],
     ) -> EnvironmentReport:
         return self.validate_artifacts(installation, files)
+
+    def validate_artifacts(
+        self, installation: GameInstallation, files: tuple[tuple[ModFile, Path], ...]
+    ) -> EnvironmentReport:
+        return self.loader_strategy.inspect(installation, files)
+
+    def validate_payload(
+        self, installation: GameInstallation, rule: InstallRule, paths: tuple[str, ...]
+    ) -> EnvironmentReport:
+        specification = next(
+            item for item in self.rule.install_strategies if item.strategy_id == rule.rule_id
+        )
+        if specification.kind == InstallStrategyKind.PLUGIN:
+            return self.loader_strategy.payload(paths)
+        return EnvironmentReport()
+
+    def auxiliary_files(
+        self, installation: GameInstallation, rule: InstallRule, paths: tuple[str, ...]
+    ) -> dict[str, bytes]:
+        specification = next(
+            item for item in self.rule.install_strategies if item.strategy_id == rule.rule_id
+        )
+        if specification.kind == InstallStrategyKind.PLUGIN:
+            return self.loader_strategy.auxiliary(paths)
+        return {}
 
     def validate_profile(
         self,
