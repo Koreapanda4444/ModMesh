@@ -40,6 +40,7 @@ class StoreIds:
 class DetectionRule:
     required_files: tuple[str, ...]
     steam_manifest_required: bool = False
+    process_strategy: str = "executable"
 
 
 @dataclass(frozen=True)

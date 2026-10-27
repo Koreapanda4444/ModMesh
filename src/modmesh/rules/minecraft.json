@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "revision": 1,
+  "game_id": "minecraft",
+  "name": "Minecraft Java Edition",
+  "edition": "java",
+  "platforms": [
+    "windows",
+    "linux",
+    "macos"
+  ],
+  "store_ids": {},
+  "detect": {
+    "required_files": [],
+    "process_strategy": "minecraft-instance"
+  },
+  "game_version": {
+    "strategy": "unknown"
+  },
+  "loader": {
+    "strategy": "legacy-minecraft"
+  },
+  "mod_roots": [
+    {
+      "root_id": "mods",
+      "path": "mods",
+      "layout": "java-jar"
+    }
+  ],
+  "install_strategies": [
+    {
+      "strategy_id": "minecraft-managed",
+      "kind": "file",
+      "root_id": "mods",
+      "extensions": [
+        ".jar"
+      ]
+    }
+  ],
+  "mod_types": [
+    "jar"
+  ],
+  "profile_scope": "managed-files",
+  "launch": {
+    "strategy": "manual"
+  },
+  "capabilities": [
+    "discovery",
+    "version",
+    "mod_discovery",
+    "install_rules",
+    "removal_rules",
+    "profiles"
+  ]
+}

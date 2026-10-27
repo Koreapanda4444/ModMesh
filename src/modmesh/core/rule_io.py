@@ -225,11 +225,17 @@ def _parse(value: object) -> GameRule:
         raise _fail("Rule needs a platform")
     stores = _fields(data["store_ids"], "steam")
     store = StoreIds(_app_id(stores.get("steam")))
-    detection = _fields(data["detect"], "required_files steam_manifest_required", "required_files")
+    detection = _fields(
+        data["detect"], "required_files steam_manifest_required process_strategy", "required_files"
+    )
     required = tuple(_path(item) for item in _strings(detection["required_files"], 16))
-    if not required or len({item.casefold() for item in required}) != len(required):
+    if len({item.casefold() for item in required}) != len(required):
         raise _fail("Rule needs unambiguous required game files")
-    detect = DetectionRule(required, _boolean(detection.get("steam_manifest_required", False)))
+    detect = DetectionRule(
+        required,
+        _boolean(detection.get("steam_manifest_required", False)),
+        _text(detection.get("process_strategy", "executable")),
+    )
     version = _fields(data["game_version"], "strategy", "strategy")
     version_strategy = _text(version["strategy"])
     if version_strategy not in {"unknown", "steam-build"}:
@@ -247,6 +253,13 @@ def _parse(value: object) -> GameRule:
         raise _fail("Loader strategy requires explicit marker paths")
     if loader.strategy == LoaderKind.NONE and loader.markers:
         raise _fail("A rule without a loader cannot declare loader markers")
+    legacy_minecraft = loader.strategy == LoaderKind.LEGACY_MINECRAFT
+    if (
+        detect.process_strategy not in {"executable", "minecraft-instance"}
+        or (detect.process_strategy == "minecraft-instance" and not legacy_minecraft)
+        or (not required and not legacy_minecraft)
+    ):
+        raise _fail("Detection requires files or the built-in Minecraft instance bridge")
     marker_names = {
         LoaderKind.BEPINEX: {"bepinex.dll", "bepinex.core.dll"},
         LoaderKind.UE4SS: {"ue4ss.dll"},
@@ -267,6 +280,7 @@ def _parse(value: object) -> GameRule:
             "ue4ss",
             "bepinex",
             "jar",
+            "java-jar",
             "steam-workshop",
         }:
             raise _fail("Unknown mod root layout")
@@ -396,8 +410,13 @@ def _parse(value: object) -> GameRule:
             GameCapability.PROFILES,
         )
     )
-    if mutating and (
-        not writable or not any(PurePosixPath(path).suffix.lower() == ".exe" for path in required)
+    if (
+        mutating
+        and not legacy_minecraft
+        and (
+            not writable
+            or not any(PurePosixPath(path).suffix.lower() == ".exe" for path in required)
+        )
     ):
         raise _fail("File changes require a writable strategy and an explicit game process marker")
     if GameCapability.MOD_DISCOVERY in caps and not roots:

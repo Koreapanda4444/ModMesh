@@ -16,12 +16,12 @@ from modmesh.core.games import (
     EnvironmentIssue,
     EnvironmentReport,
     GameAdapter,
-    GameCapability,
     InstallRule,
     ModLocation,
 )
 from modmesh.core.planning import portable_path, target_path
 from modmesh.core.processes import java_guard
+from modmesh.core.rule_resources import builtin_rule
 from modmesh.domain.models import (
     Game,
     GameInstallation,
@@ -145,18 +145,14 @@ class InstanceMetadata:
     chains: tuple[tuple[dict[str, object], ...], ...] = ()
 
 
+GAME_RULE = builtin_rule("minecraft")
+
+
 class MinecraftAdapter(GameAdapter):
-    game = Game("minecraft", "Minecraft Java Edition", ("java",), frozenset(Platform))
-    capabilities = frozenset(
-        {
-            GameCapability.DISCOVERY,
-            GameCapability.VERSION,
-            GameCapability.MOD_DISCOVERY,
-            GameCapability.INSTALL_RULES,
-            GameCapability.REMOVAL_RULES,
-            GameCapability.PROFILES,
-        }
+    game = Game(
+        GAME_RULE.game_id, GAME_RULE.name, (GAME_RULE.edition,), frozenset(GAME_RULE.platforms)
     )
+    capabilities = frozenset(GAME_RULE.capabilities)
 
     def __init__(self, roots: tuple[Path, ...] = ()) -> None:
         self.roots = roots
@@ -357,10 +353,26 @@ class MinecraftAdapter(GameAdapter):
             or not file.filename.casefold().endswith(".jar")
         ):
             return ()
-        return (InstallRule("minecraft-" + loader.name, "mods", "file", frozenset({".jar"})),)
+        specification = GAME_RULE.install_strategies[0]
+        return (
+            InstallRule(
+                "minecraft-" + loader.name,
+                GAME_RULE.mod_roots[0].path,
+                "file",
+                frozenset(specification.extensions),
+            ),
+        )
 
     def removal_rules(self, installation: GameInstallation) -> tuple[InstallRule, ...]:
-        return (InstallRule("minecraft-managed", "mods", "file", frozenset({".jar"})),)
+        specification = GAME_RULE.install_strategies[0]
+        return (
+            InstallRule(
+                specification.strategy_id,
+                GAME_RULE.mod_roots[0].path,
+                "file",
+                frozenset(specification.extensions),
+            ),
+        )
 
     def _jars(
         self, installation: GameInstallation, excluded: frozenset[str]
@@ -496,7 +508,8 @@ class MinecraftAdapter(GameAdapter):
         )
 
     def mod_locations(self, installation: GameInstallation) -> tuple[ModLocation, ...]:
-        return (ModLocation("Java mods", installation.path / "mods", "java-jar"),)
+        root = GAME_RULE.mod_roots[0]
+        return (ModLocation("Java mods", installation.path / root.path, root.layout),)
 
     def scan_mods(self, installation: GameInstallation) -> tuple[InstalledMod, ...]:
         root = installation.path

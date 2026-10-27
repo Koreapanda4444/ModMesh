@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "revision": 1,
+  "game_id": "palworld",
+  "name": "Palworld",
+  "edition": "steam",
+  "platforms": [
+    "windows"
+  ],
+  "store_ids": {
+    "steam": "1623730"
+  },
+  "detect": {
+    "required_files": [
+      "Palworld.exe",
+      "Pal/Binaries/Win64/Palworld-Win64-Shipping.exe"
+    ]
+  },
+  "game_version": {
+    "strategy": "steam-build"
+  },
+  "loader": {
+    "strategy": "ue4ss",
+    "markers": [
+      "Pal/Binaries/Win64/UE4SS.dll",
+      "Pal/Binaries/Win64/ue4ss/UE4SS.dll"
+    ]
+  },
+  "mod_roots": [
+    {
+      "root_id": "pak",
+      "path": "Pal/Content/Paks/~mods",
+      "layout": "pak"
+    },
+    {
+      "root_id": "blueprint",
+      "path": "Pal/Content/Paks/LogicMods",
+      "layout": "blueprint-pak"
+    },
+    {
+      "root_id": "ue4ss-legacy",
+      "path": "Pal/Binaries/Win64/Mods",
+      "layout": "ue4ss"
+    },
+    {
+      "root_id": "ue4ss-nested",
+      "path": "Pal/Binaries/Win64/ue4ss/Mods",
+      "layout": "ue4ss"
+    }
+  ],
+  "install_strategies": [
+    {
+      "strategy_id": "palworld-pak",
+      "kind": "file",
+      "root_id": "pak",
+      "extensions": [
+        ".pak",
+        ".utoc",
+        ".ucas"
+      ]
+    },
+    {
+      "strategy_id": "palworld-blueprint",
+      "kind": "file",
+      "root_id": "blueprint",
+      "extensions": [
+        ".pak",
+        ".utoc",
+        ".ucas"
+      ]
+    }
+  ],
+  "mod_types": [
+    "pak",
+    "ue4ss"
+  ],
+  "profile_scope": "managed-files",
+  "launch": {
+    "strategy": "steam",
+    "app_id": "1623730"
+  },
+  "capabilities": [
+    "discovery",
+    "version",
+    "mod_discovery",
+    "install_rules",
+    "profiles"
+  ]
+}

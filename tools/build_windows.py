@@ -192,6 +192,8 @@ def build(output):
         str(ROOT / "src"),
         "--hidden-import",
         "keyring.backends.Windows",
+        "--collect-data",
+        "modmesh",
         "--collect-submodules",
         "win32ctypes",
         "--copy-metadata",

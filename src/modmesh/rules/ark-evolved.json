@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "revision": 1,
+  "game_id": "ark-evolved",
+  "name": "ARK: Survival Evolved",
+  "edition": "steam",
+  "platforms": [
+    "windows"
+  ],
+  "store_ids": {
+    "steam": "346110"
+  },
+  "detect": {
+    "required_files": [
+      "ShooterGame/Binaries/Win64/ShooterGame.exe"
+    ],
+    "steam_manifest_required": true
+  },
+  "game_version": {
+    "strategy": "steam-build"
+  },
+  "loader": {
+    "strategy": "none"
+  },
+  "mod_roots": [
+    {
+      "root_id": "workshop",
+      "path": "ShooterGame/Content/Mods",
+      "layout": "steam-workshop"
+    }
+  ],
+  "install_strategies": [
+    {
+      "strategy_id": "ark-workshop",
+      "kind": "readonly",
+      "root_id": "workshop",
+      "extensions": [
+        ".mod"
+      ]
+    }
+  ],
+  "mod_types": [
+    "workshop"
+  ],
+  "profile_scope": "none",
+  "launch": {
+    "strategy": "steam",
+    "app_id": "346110"
+  },
+  "capabilities": [
+    "discovery",
+    "version",
+    "mod_discovery",
+    "workshop_handoff"
+  ]
+}

@@ -7,7 +7,7 @@ from modmesh.adapters.games.steam import read_appmanifest, steam_installations
 from modmesh.adapters.loaders import standard_loaders
 from modmesh.core.capabilities import CapabilityEvidence, CapabilitySupport, SupportState
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
-from modmesh.core.game_rules import InstallStrategyKind
+from modmesh.core.game_rules import GameRule, InstallStrategyKind
 from modmesh.core.games import (
     DiscoveryContext,
     EnvironmentIssue,
@@ -30,6 +30,21 @@ from modmesh.domain.models import (
     ModFile,
     Platform,
 )
+
+
+def rule_candidates(rule: GameRule, context: DiscoveryContext) -> Iterable[Path]:
+    yield from context.roots
+    if rule.store_ids.steam is not None:
+        yield from (item.path for item in steam_installations(context, rule.store_ids.steam))
+
+
+def rule_files_present(rule: GameRule, root: Path) -> bool:
+    try:
+        return root.is_dir() and all(
+            target_path(root, name).is_file() for name in rule.detect.required_files
+        )
+    except (OSError, ModMeshError):
+        return False
 
 
 class RuleGameAdapter(GameAdapter):
@@ -62,20 +77,14 @@ class RuleGameAdapter(GameAdapter):
         )
 
     def candidates(self, context: DiscoveryContext) -> Iterable[Path]:
-        yield from context.roots
-        if self.rule.store_ids.steam is not None:
-            yield from (
-                item.path for item in steam_installations(context, self.rule.store_ids.steam)
-            )
+        yield from rule_candidates(self.rule, context)
 
     def inspect(self, path: Path, platform: Platform) -> GameInstallation | None:
         if platform not in self.game.platforms:
             return None
         root = path.resolve()
         try:
-            if not root.is_dir() or any(
-                not target_path(root, name).is_file() for name in self.rule.detect.required_files
-            ):
+            if not rule_files_present(self.rule, root):
                 return None
             build_id = None
             app_id = self.rule.store_ids.steam

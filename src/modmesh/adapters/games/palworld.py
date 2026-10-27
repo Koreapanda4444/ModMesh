@@ -2,7 +2,8 @@ from collections.abc import Iterable
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
-from modmesh.adapters.games.steam import read_appmanifest, steam_installations
+from modmesh.adapters.games.rule_based import rule_candidates, rule_files_present
+from modmesh.adapters.games.steam import read_appmanifest
 from modmesh.adapters.loaders import ue4ss_auxiliary, ue4ss_payload
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.games import (
@@ -10,11 +11,11 @@ from modmesh.core.games import (
     EnvironmentIssue,
     EnvironmentReport,
     GameAdapter,
-    GameCapability,
     InstallRule,
     ModLocation,
 )
 from modmesh.core.processes import executable_guard
+from modmesh.core.rule_resources import builtin_rule
 from modmesh.domain.models import (
     Game,
     GameInstallation,
@@ -26,35 +27,23 @@ from modmesh.domain.models import (
     Platform,
 )
 
-APP_ID = "1623730"
-_SHIPPING = Path("Pal/Binaries/Win64/Palworld-Win64-Shipping.exe")
+GAME_RULE = builtin_rule("palworld")
+APP_ID = str(GAME_RULE.store_ids.steam)
+_SHIPPING = Path(GAME_RULE.detect.required_files[1])
 
 
 class PalworldAdapter(GameAdapter):
-    game = Game("palworld", "Palworld", ("steam",), frozenset({Platform.WINDOWS}))
-    capabilities = frozenset(
-        {
-            GameCapability.DISCOVERY,
-            GameCapability.VERSION,
-            GameCapability.MOD_DISCOVERY,
-            GameCapability.INSTALL_RULES,
-            GameCapability.PROFILES,
-        }
+    game = Game(
+        GAME_RULE.game_id, GAME_RULE.name, (GAME_RULE.edition,), frozenset(GAME_RULE.platforms)
     )
+    capabilities = frozenset(GAME_RULE.capabilities)
 
     def candidates(self, context: DiscoveryContext) -> Iterable[Path]:
-        return (
-            *context.roots,
-            *(installation.path for installation in steam_installations(context, APP_ID)),
-        )
+        return rule_candidates(GAME_RULE, context)
 
     def inspect(self, path: Path, platform: Platform) -> GameInstallation | None:
         path = path.resolve()
-        if (
-            platform != Platform.WINDOWS
-            or not (path / "Palworld.exe").is_file()
-            or not (path / _SHIPPING).is_file()
-        ):
+        if platform != Platform.WINDOWS or not rule_files_present(GAME_RULE, path):
             return None
         version = GameVersion()
         manifest = path.parent.parent / f"appmanifest_{APP_ID}.acf"
@@ -115,11 +104,13 @@ class PalworldAdapter(GameAdapter):
 
     def mod_locations(self, installation: GameInstallation) -> tuple[ModLocation, ...]:
         root = installation.path
-        return (
-            ModLocation("Pak mods", root / "Pal/Content/Paks/~mods", "pak"),
-            ModLocation("Blueprint mods", root / "Pal/Content/Paks/LogicMods", "blueprint-pak"),
-            ModLocation("UE4SS legacy mods", root / "Pal/Binaries/Win64/Mods", "ue4ss"),
-            ModLocation("UE4SS nested mods", root / "Pal/Binaries/Win64/ue4ss/Mods", "ue4ss"),
+        return tuple(
+            ModLocation(label, root / specification.path, specification.layout)
+            for label, specification in zip(
+                ("Pak mods", "Blueprint mods", "UE4SS legacy mods", "UE4SS nested mods"),
+                GAME_RULE.mod_roots,
+                strict=True,
+            )
         )
 
     def installation_rules(
@@ -131,11 +122,10 @@ class PalworldAdapter(GameAdapter):
         layout = "archive" if archive else "file"
         extensions = frozenset({".pak", ".utoc", ".ucas"}) if archive else frozenset({".pak"})
         docs = frozenset({"readme.md", "readme.txt", "license", "license.txt", "changelog.txt"})
+        destinations = {root.root_id: root.path for root in GAME_RULE.mod_roots}
         rules = [
-            InstallRule("palworld-pak", "Pal/Content/Paks/~mods", layout, extensions, docs),
-            InstallRule(
-                "palworld-blueprint", "Pal/Content/Paks/LogicMods", layout, extensions, docs
-            ),
+            InstallRule(item.strategy_id, destinations[item.root_id], layout, extensions, docs)
+            for item in GAME_RULE.install_strategies
         ]
         if archive and installation.loader is not None and installation.loader.name == "ue4ss":
             base = (

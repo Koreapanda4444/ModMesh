@@ -6,16 +6,17 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from modmesh.adapters.games.steam import read_appmanifest, read_keyvalues, steam_installations
+from modmesh.adapters.games.rule_based import rule_candidates, rule_files_present
+from modmesh.adapters.games.steam import read_appmanifest, read_keyvalues
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.games import (
     DiscoveryContext,
     EnvironmentIssue,
     EnvironmentReport,
     GameAdapter,
-    GameCapability,
     ModLocation,
 )
+from modmesh.core.rule_resources import builtin_rule
 from modmesh.domain.models import (
     Game,
     GameInstallation,
@@ -26,9 +27,10 @@ from modmesh.domain.models import (
     SourceRef,
 )
 
-APP_ID = "346110"
-EXECUTABLE = "ShooterGame/Binaries/Win64/ShooterGame.exe"
-MODS = "ShooterGame/Content/Mods"
+GAME_RULE = builtin_rule("ark-evolved")
+APP_ID = str(GAME_RULE.store_ids.steam)
+EXECUTABLE = GAME_RULE.detect.required_files[0]
+MODS = GAME_RULE.mod_roots[0].path
 SETTINGS = "ShooterGame/Saved/Config/WindowsNoEditor/GameUserSettings.ini"
 WORKSHOP = "https://steamcommunity.com/workshop/browse/?appid=346110"
 
@@ -86,22 +88,17 @@ class WorkshopState:
 
 
 class ArkEvolvedAdapter(GameAdapter):
-    game = Game("ark-evolved", "ARK: Survival Evolved", ("steam",), frozenset({Platform.WINDOWS}))
-    capabilities = frozenset(
-        {
-            GameCapability.DISCOVERY,
-            GameCapability.VERSION,
-            GameCapability.MOD_DISCOVERY,
-            GameCapability.WORKSHOP_HANDOFF,
-        }
+    game = Game(
+        GAME_RULE.game_id, GAME_RULE.name, (GAME_RULE.edition,), frozenset(GAME_RULE.platforms)
     )
+    capabilities = frozenset(GAME_RULE.capabilities)
 
     def candidates(self, context: DiscoveryContext) -> Iterable[Path]:
-        return (*context.roots, *(item.path for item in steam_installations(context, APP_ID)))
+        return rule_candidates(GAME_RULE, context)
 
     def inspect(self, path: Path, platform: Platform) -> GameInstallation | None:
         path = path.resolve()
-        if platform != Platform.WINDOWS or not (path / EXECUTABLE).is_file():
+        if platform != Platform.WINDOWS or not rule_files_present(GAME_RULE, path):
             return None
         manifest = path.parent.parent / f"appmanifest_{APP_ID}.acf"
         if not manifest.is_file() or not safe(manifest, manifest.parent):
