@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import hashlib
 import io
 import json
@@ -56,6 +57,7 @@ from modmesh.core.processes import java_guard
 from modmesh.core.profiles import Profile, ProfileManager, profile_record
 from modmesh.core.removal import RemovalManager
 from modmesh.core.resolver import DependencyEdge, DependencyResolution, ResolvedMod
+from modmesh.core.rule_io import parse_rule, read_rule
 from modmesh.core.sources import (
     DownloadAccess,
     DownloadMode,
@@ -1328,6 +1330,73 @@ async def check_ark(root: Path) -> None:
         raise AssertionError("Invalid Workshop ID accepted")
 
 
+def rule_document():
+    return {
+        "schema_version": 1,
+        "game_id": "user-game",
+        "name": "사용자 게임",
+        "revision": 1,
+        "edition": "custom",
+        "platforms": ["windows"],
+        "store_ids": {},
+        "detect": {"required_files": ["Game.exe"]},
+        "game_version": {"strategy": "unknown"},
+        "loader": {"strategy": "none"},
+        "mod_roots": [{"root_id": "mods", "path": "Mods", "layout": "files"}],
+        "install_strategies": [
+            {"strategy_id": "mod-file", "kind": "file", "root_id": "mods", "extensions": [".pak"]}
+        ],
+        "mod_types": ["pak"],
+        "profile_scope": "managed-files",
+        "launch": {"strategy": "manual"},
+        "capabilities": ["discovery", "version", "mod_discovery", "install_rules", "profiles"],
+    }
+
+
+def check_rule_parsing(root: Path) -> None:
+    root.mkdir(parents=True)
+    document = rule_document()
+    rule = parse_rule(json.dumps(document))
+    assert parse_rule(rule.to_json()).digest == rule.digest
+    path = root / "rule.json"
+    path.write_text(rule.to_json(), encoding="utf-8")
+    assert read_rule(path) == rule
+    invalid = [
+        rule.to_json().replace('"schema_version":1', '"schema_version":true'),
+        rule.to_json().replace('"revision":1', '"revision":1,"revision":2'),
+        "[" * 1000 + "0" + "]" * 1000,
+        " " * 65537,
+        rule.to_json().replace('"name":"사용자 게임"', '"name":"\\ud800"'),
+    ]
+    for field in ("hooks", "url", "command"):
+        invalid.append(json.dumps({**document, field: "powershell.exe"}))
+    for unsafe in (
+        "../outside",
+        "C:/escape",
+        "%APPDATA%/private",
+        "Saved/mods",
+        ".modmesh-state-v1",
+    ):
+        changed = copy.deepcopy(document)
+        changed["mod_roots"][0]["path"] = unsafe
+        invalid.append(json.dumps(changed))
+    for command in ("cmd.exe", "powershell.exe", "python.exe"):
+        changed = copy.deepcopy(document)
+        changed["detect"]["required_files"] = [command]
+        changed["launch"] = {"strategy": "executable", "executable": command}
+        invalid.append(json.dumps(changed))
+    changed = copy.deepcopy(document)
+    changed["install_strategies"][0]["extensions"] = [".exe"]
+    invalid.append(json.dumps(changed))
+    for text in invalid:
+        try:
+            parse_rule(text)
+        except ModMeshError:
+            pass
+        else:
+            raise AssertionError("Unsafe or malformed rule was accepted")
+
+
 def check_legacy_contracts(root: Path) -> None:
     root.mkdir(parents=True)
     game = root / "Palworld"
@@ -1394,6 +1463,7 @@ def check_legacy_contracts(root: Path) -> None:
 async def main() -> None:
     logging.disable(logging.CRITICAL)
     with TemporaryDirectory(prefix="modmesh-safety-") as name:
+        check_rule_parsing(Path(name) / "rule-parsing")
         check_legacy_contracts(Path(name) / "legacy-contracts")
         await asyncio.wait_for(check_downloads(Path(name)), timeout=20)
         await asyncio.wait_for(check_linked_downloads(Path(name)), timeout=20)
