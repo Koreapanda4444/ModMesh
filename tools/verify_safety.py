@@ -58,6 +58,7 @@ from modmesh.core.profiles import Profile, ProfileManager, profile_record
 from modmesh.core.removal import RemovalManager
 from modmesh.core.resolver import DependencyEdge, DependencyResolution, ResolvedMod
 from modmesh.core.rule_io import parse_rule, read_rule
+from modmesh.core.rules import RuleOrigin, RuleRegistry
 from modmesh.core.sources import (
     DownloadAccess,
     DownloadMode,
@@ -1361,6 +1362,35 @@ def check_rule_parsing(root: Path) -> None:
     path = root / "rule.json"
     path.write_text(rule.to_json(), encoding="utf-8")
     assert read_rule(path) == rule
+    registry = RuleRegistry()
+    pending = registry.register(rule, RuleOrigin.COMMUNITY, "community.json")
+    assert not pending.approved and not registry.all()
+    registry.register(rule, RuleOrigin.COMMUNITY, "community.json", approved_digest=rule.digest)
+    assert registry.get(rule.game_id).trust == "user-approved"
+    updated = replace(rule, revision=2, name="수정한 게임")
+    try:
+        registry.register(updated, RuleOrigin.USER, "local.json", approved_digest=updated.digest)
+    except ModMeshError:
+        pass
+    else:
+        raise AssertionError("Conflicting rule silently replaced")
+    registry.register(
+        updated,
+        RuleOrigin.USER,
+        "local.json",
+        approved_digest=updated.digest,
+        expected_digest=rule.digest,
+    )
+    assert registry.get(rule.game_id).rule.revision == 2
+    for rejected in (rule, replace(rule, game_id="minecraft")):
+        try:
+            registry.register(
+                rejected, RuleOrigin.COMMUNITY, "remote.json", approved_digest=rejected.digest
+            )
+        except ModMeshError:
+            pass
+        else:
+            raise AssertionError("Lower-trust or protected rule override accepted")
     invalid = [
         rule.to_json().replace('"schema_version":1', '"schema_version":true'),
         rule.to_json().replace('"revision":1', '"revision":1,"revision":2'),
