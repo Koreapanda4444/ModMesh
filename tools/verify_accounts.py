@@ -324,6 +324,14 @@ def verify():
             workspace_panel.import_files((local,))
             wait()
             assert workspace_panel.entries.rowCount() == 1, workspace_panel.status.text()
+            workspace_panel.entries.selectRow(0)
+            workspace_panel.toggle_enabled()
+            wait()
+            assert not workspace_panel.workspace.enabled_entries
+            workspace_panel.entries.selectRow(0)
+            workspace_panel.toggle_enabled()
+            wait()
+            assert workspace_panel.workspace.enabled_entries
             assert local.exists()
             workspace_panel.close()
             panel.server.setText("http://127.0.0.1")

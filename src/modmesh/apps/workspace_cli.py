@@ -11,6 +11,7 @@ from modmesh.apps.workspace_artifacts import import_local
 from modmesh.core.config import ClientSettings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.workspaces import WorkspaceStore
+from modmesh.domain.models import SourceRef
 from modmesh.storage.metadata import MetadataStore
 
 
@@ -18,7 +19,23 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
     parser = commands.add_parser("workspace", help="Edit independent local modpack workspaces")
     parser.add_argument(
         "action",
-        choices=("list", "create", "show", "rename", "clone", "delete-plan", "delete", "import"),
+        choices=(
+            "list",
+            "create",
+            "show",
+            "rename",
+            "clone",
+            "delete-plan",
+            "delete",
+            "import",
+            "enable",
+            "disable",
+            "pin",
+            "unpin",
+            "recipe",
+            "remove-entry",
+            "order",
+        ),
     )
     parser.add_argument("--game")
     parser.add_argument("--id", dest="pack_id")
@@ -26,6 +43,11 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
     parser.add_argument("--expected", help="Workspace digest returned by show")
     parser.add_argument("--approve", help="Exact deletion plan fingerprint")
     parser.add_argument("--file", type=Path)
+    parser.add_argument("--source")
+    parser.add_argument("--project")
+    parser.add_argument("--rule")
+    parser.add_argument("--prefix")
+    parser.add_argument("--order", action="append", default=[])
 
 
 def workspace_command(args: argparse.Namespace, settings: ClientSettings) -> int:
@@ -52,6 +74,54 @@ def workspace_command(args: argparse.Namespace, settings: ClientSettings) -> int
         else:
             if not args.pack_id:
                 raise ModMeshError(ErrorCode.VALIDATION, "Select --id PACK_ID")
+            if args.action in {
+                "enable",
+                "disable",
+                "pin",
+                "unpin",
+                "recipe",
+                "remove-entry",
+                "order",
+            }:
+                if not args.expected:
+                    raise ModMeshError(ErrorCode.VALIDATION, "Editing needs --expected DIGEST")
+                if args.action == "order":
+                    refs = tuple(
+                        SourceRef(*value.split(":", 1)) for value in args.order if ":" in value
+                    )
+                    if len(refs) != len(args.order):
+                        raise ModMeshError(
+                            ErrorCode.VALIDATION, "Order uses SOURCE:PROJECT references"
+                        )
+                    workspace = store.reorder(args.pack_id, refs, args.expected)
+                else:
+                    if not args.source or not args.project:
+                        raise ModMeshError(ErrorCode.VALIDATION, "Select --source and --project")
+                    workspace = store.edit_entry(
+                        args.pack_id,
+                        SourceRef(args.source, args.project),
+                        args.expected,
+                        enabled=True
+                        if args.action == "enable"
+                        else False
+                        if args.action == "disable"
+                        else None,
+                        pinned=True
+                        if args.action == "pin"
+                        else False
+                        if args.action == "unpin"
+                        else None,
+                        rule_id=args.rule if args.action == "recipe" else None,
+                        prefix=args.prefix if args.action == "recipe" else None,
+                        remove=args.action == "remove-entry",
+                        set_recipe=args.action == "recipe",
+                    )
+                print(
+                    json.dumps(
+                        {**workspace.document(), "digest": workspace.digest}, ensure_ascii=False
+                    )
+                )
+                return 0
             if args.action in {"rename", "clone"}:
                 if not args.name or not args.expected:
                     raise ModMeshError(

@@ -6,6 +6,8 @@ from dataclasses import dataclass, replace
 
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.packs import PackEntry
+from modmesh.core.planning import portable_path
+from modmesh.domain.models import SourceRef
 from modmesh.domain.validation import require_id
 from modmesh.domain.workspaces import PackIdentity
 from modmesh.storage.installed import array_record, integer_record, object_record, string_record
@@ -33,6 +35,9 @@ class Workspace:
     name: str
     revision: int = 1
     entries: tuple[PackEntry, ...] = ()
+    disabled: tuple[SourceRef, ...] = ()
+    unpinned: tuple[SourceRef, ...] = ()
+    order: tuple[SourceRef, ...] = ()
 
     def document(self) -> dict[str, object]:
         return {
@@ -42,17 +47,53 @@ class Workspace:
             "name": self.name,
             "revision": self.revision,
             "entries": [entry.document() for entry in self.entries],
+            "disabled": [
+                {"source_id": ref.source_id, "project_id": ref.project_id} for ref in self.disabled
+            ],
+            "unpinned": [
+                {"source_id": ref.source_id, "project_id": ref.project_id} for ref in self.unpinned
+            ],
+            "order": [
+                {"source_id": ref.source_id, "project_id": ref.project_id} for ref in self.order
+            ],
         }
 
     @property
     def digest(self) -> str:
         return document_digest(self.document())
 
+    @property
+    def enabled_entries(self) -> tuple[PackEntry, ...]:
+        ordered = {ref: index for index, ref in enumerate(self.order)}
+        return tuple(
+            sorted(
+                (
+                    entry
+                    for entry in self.entries
+                    if entry.mod.project.reference not in self.disabled
+                ),
+                key=lambda entry: ordered.get(entry.mod.project.reference, len(ordered)),
+            )
+        )
+
     @classmethod
     def read(cls, value: object) -> Workspace:
         data = object_record(value)
         if (
-            set(data) != {"schema_version", "pack_id", "game_id", "name", "revision", "entries"}
+            set(data)
+            - {
+                "schema_version",
+                "pack_id",
+                "game_id",
+                "name",
+                "revision",
+                "entries",
+                "disabled",
+                "unpinned",
+                "order",
+            }
+            or not {"schema_version", "pack_id", "game_id", "name", "revision", "entries"}
+            <= set(data)
             or data["schema_version"] != 2
         ):
             raise ModMeshError(ErrorCode.STORAGE, "Unsupported workspace schema; original retained")
@@ -67,12 +108,31 @@ class Workspace:
             raise ModMeshError(ErrorCode.VALIDATION, "Workspace needs at most 128 distinct mods")
         if any(entry.mod.project.game_id != identity.game_id for entry in entries):
             raise ModMeshError(ErrorCode.CONFLICT, "Workspace entries belong to another game")
+        flags = []
+        references = {entry.mod.project.reference for entry in entries}
+        for name in ("disabled", "unpinned", "order"):
+            values = []
+            for raw in array_record(data.get(name, [])):
+                record = object_record(raw)
+                if set(record) != {"source_id", "project_id"}:
+                    raise ModMeshError(ErrorCode.STORAGE, "Invalid workspace mod reference")
+                values.append(
+                    SourceRef(
+                        string_record(record["source_id"]), string_record(record["project_id"])
+                    )
+                )
+            if len(values) != len(set(values)) or not set(values) <= references:
+                raise ModMeshError(
+                    ErrorCode.STORAGE, "Workspace flags refer to missing or duplicate mods"
+                )
+            flags.append(tuple(values))
         return cls(
             identity.pack_id,
             identity.game_id,
             pack_name(string_record(data["name"])),
             revision,
             entries,
+            *flags,
         )
 
 
@@ -137,6 +197,68 @@ class WorkspaceStore:
         current = self.get(pack_id)
         return self.save(
             replace(current, name=pack_name(name), revision=current.revision + 1), expected
+        )
+
+    def edit_entry(
+        self,
+        pack_id: str,
+        reference: SourceRef,
+        expected: str,
+        *,
+        enabled: bool | None = None,
+        pinned: bool | None = None,
+        rule_id: str | None = None,
+        prefix: str | None = None,
+        remove: bool = False,
+        set_recipe: bool = False,
+    ) -> Workspace:
+        current = self.get(pack_id)
+        if reference not in {entry.mod.project.reference for entry in current.entries}:
+            raise ModMeshError(ErrorCode.NOT_FOUND, "Workspace mod does not exist")
+        if rule_id is not None:
+            require_id(rule_id, "installation strategy")
+        if prefix:
+            prefix = portable_path(prefix)
+        entries = tuple(
+            replace(
+                entry,
+                rule_id=rule_id if set_recipe or rule_id is not None else entry.rule_id,
+                prefix=prefix if prefix is not None else entry.prefix,
+            )
+            if entry.mod.project.reference == reference
+            else entry
+            for entry in current.entries
+            if not remove or entry.mod.project.reference != reference
+        )
+        disabled = set(current.disabled)
+        unpinned = set(current.unpinned)
+        for selected, values in ((enabled, disabled), (pinned, unpinned)):
+            if selected is True or remove:
+                values.discard(reference)
+            elif selected is False:
+                values.add(reference)
+        return self.save(
+            replace(
+                current,
+                entries=entries,
+                disabled=tuple(sorted(disabled)),
+                unpinned=tuple(sorted(unpinned)),
+                order=tuple(ref for ref in current.order if not remove or ref != reference),
+                revision=current.revision + 1,
+            ),
+            expected,
+        )
+
+    def reorder(self, pack_id: str, references: tuple[SourceRef, ...], expected: str) -> Workspace:
+        current = self.get(pack_id)
+        if len(set(references)) != len(references) or set(references) != {
+            entry.mod.project.reference for entry in current.entries
+        }:
+            raise ModMeshError(
+                ErrorCode.VALIDATION, "Explicit order must contain every mod exactly once"
+            )
+        return self.save(
+            replace(current, order=references, revision=current.revision + 1), expected
         )
 
     def clone(self, pack_id: str, name: str, expected: str) -> Workspace:

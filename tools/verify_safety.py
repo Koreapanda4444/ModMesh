@@ -1345,6 +1345,26 @@ async def check_workspace_import(root: Path) -> None:
     source.write_bytes(b"local content")
     imported = await import_local(settings, workspace.pack_id, source, workspace.digest)
     assert imported.revision == 2 and len(imported.entries) == 1
+    with MetadataStore(settings.paths.database) as database:
+        store = WorkspaceStore(database)
+        ref = imported.entries[0].mod.project.reference
+        disabled = store.edit_entry(
+            imported.pack_id, ref, imported.digest, enabled=False, pinned=False
+        )
+        assert not disabled.enabled_entries and ref in disabled.unpinned
+        enabled = store.edit_entry(
+            disabled.pack_id,
+            ref,
+            disabled.digest,
+            enabled=True,
+            pinned=True,
+            rule_id="palworld-pak",
+            prefix="",
+        )
+        assert enabled.enabled_entries and not enabled.unpinned
+        reordered = store.reorder(enabled.pack_id, (ref,), enabled.digest)
+        assert reordered.enabled_entries == enabled.enabled_entries
+        imported = reordered
     assert str(root) not in json.dumps(imported.document())
     source.unlink()
     retained = local_artifact(settings, imported.entries[0].mod.file)

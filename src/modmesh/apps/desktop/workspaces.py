@@ -21,6 +21,7 @@ from modmesh.apps.desktop.workers import run_async
 from modmesh.apps.workspace_artifacts import import_local
 from modmesh.core.config import ClientSettings
 from modmesh.core.games import GameCapability, GameRegistry
+from modmesh.core.packs import PackEntry
 from modmesh.core.workspaces import Workspace, WorkspaceStore
 from modmesh.domain.models import GameInstallation
 from modmesh.storage.metadata import MetadataStore
@@ -61,8 +62,25 @@ class WorkspacePanel(QWidget):
         self.add_button.clicked.connect(self.choose_files)
         row.addWidget(self.add_button)
         layout.addLayout(row)
-        self.entries = table(("모드", "파일", "출처", "크기"))
+        self.entries = table(("모드", "파일", "출처", "크기", "사용", "버전 정책"))
+        self.entries.itemSelectionChanged.connect(self.selected_entry)
         layout.addWidget(self.entries, 1)
+        row = QHBoxLayout()
+        self.toggle = QPushButton("사용 전환")
+        self.toggle.clicked.connect(self.toggle_enabled)
+        row.addWidget(self.toggle)
+        self.pin = QPushButton("버전 고정 전환")
+        self.pin.clicked.connect(self.toggle_pin)
+        row.addWidget(self.pin)
+        self.strategy = QComboBox()
+        row.addWidget(self.strategy, 1)
+        self.prefix = QLineEdit()
+        self.prefix.setPlaceholderText("ZIP 내부 prefix · 선택 사항")
+        row.addWidget(self.prefix, 1)
+        self.recipe_button = QPushButton("배치 선택 저장")
+        self.recipe_button.clicked.connect(self.save_recipe)
+        row.addWidget(self.recipe_button)
+        layout.addLayout(row)
         self.status = QLabel(
             "게임을 선택하고 팩을 만드세요. ZIP/JAR/DLL/Pak 파일을 끌어 놓을 수도 있습니다."
         )
@@ -74,6 +92,67 @@ class WorkspacePanel(QWidget):
     def workspace(self) -> Workspace | None:
         identity = self.selection.currentData()
         return next((item for item in self.records if item.pack_id == identity), None)
+
+    @property
+    def entry(self) -> PackEntry | None:
+        workspace = self.workspace
+        row = self.entries.currentRow()
+        return workspace.entries[row] if workspace and 0 <= row < len(workspace.entries) else None
+
+    def selected_entry(self) -> None:
+        workspace, entry, installation = self.workspace, self.entry, self.installation
+        self.strategy.clear()
+        self.strategy.addItem("단일 배치는 자동 선택", None)
+        for button in (self.toggle, self.pin, self.recipe_button):
+            button.setEnabled(entry is not None)
+        if entry is None or workspace is None or installation is None:
+            return
+        for rule in self.games.get(installation.game_id).installation_rules(
+            installation, entry.mod.file
+        ):
+            self.strategy.addItem(f"{rule.rule_id} → {rule.destination}", rule.rule_id)
+        self.strategy.setCurrentIndex(max(0, self.strategy.findData(entry.rule_id)))
+        self.prefix.setText(entry.prefix)
+
+    def edit(
+        self, *, enabled: bool | None = None, pinned: bool | None = None, recipe: bool = False
+    ) -> None:
+        workspace, entry = self.workspace, self.entry
+        if workspace is None or entry is None:
+            return
+        rule = self.strategy.currentData()
+        prefix = self.prefix.text() if recipe else None
+
+        def work(_cancelled: threading.Event) -> Workspace:
+            with MetadataStore(self.settings.paths.database) as database:
+                return WorkspaceStore(database).edit_entry(
+                    workspace.pack_id,
+                    entry.mod.project.reference,
+                    workspace.digest,
+                    enabled=enabled,
+                    pinned=pinned,
+                    rule_id=str(rule) if recipe and rule else None,
+                    prefix=prefix,
+                    set_recipe=recipe,
+                )
+
+        def edited(value: object) -> None:
+            assert isinstance(value, Workspace)
+            self.refresh(value.pack_id)
+            self.status.setText("팩 정의를 저장했습니다. 게임에 적용하려면 변경 계획을 검토하세요.")
+
+        self.start(work, edited, self.failed, name="팩 구성 편집")
+
+    def toggle_enabled(self) -> None:
+        if self.workspace and self.entry:
+            self.edit(enabled=self.entry.mod.project.reference in self.workspace.disabled)
+
+    def toggle_pin(self) -> None:
+        if self.workspace and self.entry:
+            self.edit(pinned=self.entry.mod.project.reference in self.workspace.unpinned)
+
+    def save_recipe(self) -> None:
+        self.edit(recipe=True)
 
     def selected(self) -> None:
         self.entries.setRowCount(0)
@@ -96,8 +175,13 @@ class WorkspacePanel(QWidget):
                         entry.mod.file.filename,
                         entry.mod.project.reference.source_id,
                         str(entry.mod.file.size or 0),
+                        "꺼짐" if entry.mod.project.reference in workspace.disabled else "켜짐",
+                        "업데이트 검토"
+                        if entry.mod.project.reference in workspace.unpinned
+                        else "고정",
                     ),
                 )
+        self.selected_entry()
 
     def set_context(self, installation: GameInstallation | None) -> None:
         self.generation += 1
