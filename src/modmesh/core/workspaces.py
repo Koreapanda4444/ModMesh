@@ -67,6 +67,16 @@ class Workspace:
         return document_digest(self.document())
 
     @property
+    def selection_digest(self) -> str:
+        return document_digest(
+            {
+                "game_id": self.game_id,
+                "entries": [item.document() for item in self.enabled_entries],
+                "settings": [item.document() for item in self.settings],
+            }
+        )
+
+    @property
     def enabled_entries(self) -> tuple[PackEntry, ...]:
         ordered = {ref: index for index, ref in enumerate(self.order)}
         return tuple(

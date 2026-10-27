@@ -8,6 +8,7 @@ from pathlib import Path
 
 from modmesh.apps.library import GameLibrary
 from modmesh.apps.runtime import create_game_registry
+from modmesh.apps.workspace_activation import prepare_workspace
 from modmesh.apps.workspace_artifacts import import_local
 from modmesh.apps.workspace_legacy import adopt_profile, import_manifest_workspace
 from modmesh.apps.workspace_lifecycle import freeze_workspace, write_lock
@@ -48,6 +49,7 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
             "snapshot-show",
             "adopt-profile",
             "import-manifest",
+            "plan",
         ),
     )
     parser.add_argument("--game")
@@ -68,6 +70,21 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
 
 
 def workspace_command(args: argparse.Namespace, settings: ClientSettings) -> int:
+    if args.action == "plan":
+        if not args.pack_id or args.path is None or not args.expected:
+            raise ModMeshError(
+                ErrorCode.VALIDATION, "Activation plan needs --id, --path and --expected"
+            )
+        with MetadataStore(settings.paths.database) as database:
+            workspace = WorkspaceStore(database).get(args.pack_id)
+        installation = GameLibrary(create_game_registry(settings), settings.paths.database).inspect(
+            workspace.game_id, args.path, DiscoveryContext(current_platform())
+        )
+        prepared = asyncio.run(
+            prepare_workspace(settings, args.pack_id, installation, args.expected)
+        )
+        print(json.dumps(prepared.document(), ensure_ascii=False))
+        return 0 if prepared.applicable else 1
     if args.action in {"adopt-profile", "import-manifest"}:
         if args.action == "import-manifest":
             if args.file is None:

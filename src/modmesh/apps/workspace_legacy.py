@@ -103,6 +103,7 @@ def adopt_profile(
                 "pack_id": workspace.pack_id,
                 "target": target,
                 "workspace_digest": workspace.digest,
+                "selection_digest": workspace.selection_digest,
                 "profile_id": copied.profile_id,
                 "profile_digest": profile_configuration_digest(copied),
                 "origin": "legacy",

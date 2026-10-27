@@ -39,6 +39,7 @@ from modmesh.apps.library import GameLibrary
 from modmesh.apps.operations import prepare_pack, prepare_pack_update, prepare_resolution
 from modmesh.apps.rules import RuleRegistrationService
 from modmesh.apps.runtime import create_game_registry
+from modmesh.apps.workspace_activation import prepare_workspace
 from modmesh.apps.workspace_artifacts import artifact_vault, import_local, local_artifact
 from modmesh.apps.workspace_legacy import (
     activation_target,
@@ -1408,6 +1409,16 @@ async def check_workspace_import(root: Path) -> None:
     else:
         raise AssertionError("Lock entries did not match enabled definition")
     source.unlink()
+    prepared = await prepare_workspace(settings, imported.pack_id, installation, imported.digest)
+    assert prepared.applicable and prepared.plan is not None
+    assert (
+        prepared.fingerprint
+        == (
+            await prepare_workspace(settings, imported.pack_id, installation, imported.digest)
+        ).fingerprint
+    )
+    assert not (game / "Pal/Content/Paks/~mods/user.pak").exists()
+    assert prepared.document()["changes"]
     retained = local_artifact(settings, imported.entries[0].mod.file)
     assert retained.read_bytes() == b"local content"
     with artifact_vault(settings) as vault:
