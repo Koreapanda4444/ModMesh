@@ -18,6 +18,7 @@ from modmesh.apps.workspace_artifacts import import_local
 from modmesh.apps.workspace_environment import inspect_workspace_environment
 from modmesh.apps.workspace_legacy import adopt_profile, import_manifest_workspace
 from modmesh.apps.workspace_lifecycle import freeze_workspace, write_lock
+from modmesh.apps.workspace_restore import apply_restore, prepare_restore
 from modmesh.apps.workspace_updates import prepare_update, save_update
 from modmesh.core.compatibility import inspect_compatibility
 from modmesh.core.config import ClientSettings
@@ -73,6 +74,8 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
             "fork-plan",
             "fork",
             "branch-info",
+            "restore-plan",
+            "restore",
         ),
     )
     parser.add_argument("--game")
@@ -96,6 +99,30 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
 
 
 def workspace_command(args: argparse.Namespace, settings: ClientSettings) -> int:
+    if args.action in {"restore-plan", "restore"}:
+        if not args.pack_id or args.path is None or not args.expected or not args.snapshot:
+            raise ModMeshError(
+                ErrorCode.VALIDATION, "Restore needs --id, --path, --expected and --snapshot"
+            )
+        with MetadataStore(settings.paths.database) as database:
+            selected_workspace = WorkspaceStore(database).get(args.pack_id)
+        installation = GameLibrary(create_game_registry(settings), settings.paths.database).inspect(
+            selected_workspace.game_id, args.path, DiscoveryContext(current_platform())
+        )
+        restore = asyncio.run(
+            prepare_restore(settings, args.pack_id, args.snapshot, installation, args.expected)
+        )
+        if args.action == "restore":
+            receipt = apply_restore(settings, restore, args.approve or "")
+            print(
+                json.dumps(
+                    {"state": "committed", "receipt": receipt.document(), "game_downgraded": False},
+                    ensure_ascii=False,
+                )
+            )
+            return 0
+        print(json.dumps(restore.document(), ensure_ascii=False))
+        return int(not restore.update.applicable)
     if args.action in {
         "protect-plan",
         "protect",

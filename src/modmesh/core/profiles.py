@@ -624,6 +624,26 @@ class ProfileManager(RemovalManager):
                 tuple(item.path for item in current.files if item.setting),
             )
 
+    def stage_history_profile(self, source: Profile, name: str) -> ProfilePlan:
+        if not name.strip() or len(name) > 100:
+            raise ModMeshError(ErrorCode.VALIDATION, "Invalid restored profile name")
+        with self._locked(create=True) as store:
+            assert store is not None
+            self._ready(store)
+            if self._get(store, source.profile_id) != source:
+                raise ModMeshError(
+                    ErrorCode.CONFLICT, "Historical profile changed during restore preview"
+                )
+            for item in source.files:
+                proof = snapshot(self._blob(item.sha256))
+                if proof.sha256 != item.sha256 or proof.size != item.size:
+                    raise ModMeshError(ErrorCode.INTEGRITY, "Historical profile blob changed")
+            target = replace(
+                source, profile_id=str(uuid4()), name=name.strip(), context=self.context()
+            )
+            store.put("profiles.items", target.profile_id, profile_record(target))
+            return self._switch_plan(store, target.profile_id)
+
     def plan_switch(self, identity: str) -> ProfilePlan:
         with self._locked(create=True) as store:
             assert store is not None

@@ -17,6 +17,7 @@ from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.installation import _check_cancelled
 from modmesh.core.lockfiles import build_lock
 from modmesh.core.packs import PackEntry, PackSetting
+from modmesh.core.profiles import Profile
 from modmesh.core.workspace_history import PackSnapshot
 from modmesh.core.workspace_receipts import WorkspaceReceipts
 from modmesh.core.workspaces import (
@@ -26,6 +27,7 @@ from modmesh.core.workspaces import (
     require_workspace_editable,
 )
 from modmesh.domain.models import GameInstallation, SourceRef
+from modmesh.storage.installed import object_record
 from modmesh.storage.metadata import MetadataStore
 from modmesh.storage.rules import load_rules
 
@@ -94,6 +96,8 @@ async def prepare_update(
     settings_files: tuple[PackSetting, ...] | None = None,
     allow_pinned: tuple[SourceRef, ...] = (),
     cancelled: threading.Event | None = None,
+    template: Workspace | None = None,
+    retained_profile: Profile | None = None,
 ) -> WorkspaceUpdate:
     cancelled = cancelled or threading.Event()
     _check_cancelled(cancelled.is_set)
@@ -108,15 +112,20 @@ async def prepare_update(
         raise ModMeshError(ErrorCode.CONFLICT, "Workspace changed or belongs to a different game")
     entries = entries if entries is not None else before.entries
     refs = {entry.mod.project.reference for entry in entries}
+    basis = template or before
+    if basis.game_id != before.game_id:
+        raise ModMeshError(ErrorCode.CONFLICT, "Restore template belongs to another game")
     proposed = Workspace.read(
         replace(
-            before,
+            basis,
+            pack_id=before.pack_id,
+            name=before.name,
             revision=before.revision + 1,
             entries=entries,
-            disabled=tuple(ref for ref in before.disabled if ref in refs),
-            unpinned=tuple(ref for ref in before.unpinned if ref in refs),
-            order=tuple(ref for ref in before.order if ref in refs),
-            settings=before.settings if settings_files is None else settings_files,
+            disabled=tuple(ref for ref in basis.disabled if ref in refs),
+            unpinned=tuple(ref for ref in basis.unpinned if ref in refs),
+            order=tuple(ref for ref in basis.order if ref in refs),
+            settings=basis.settings if settings_files is None else settings_files,
         ).document()
     )
     environment = inspect_workspace_environment(settings, before, installation)
@@ -150,7 +159,7 @@ async def prepare_update(
                 proposed, current, adapter, load_rules(settings.paths.database).get(before.game_id)
             )
             activation = await prepare_locked_workspace(
-                settings, lock, current, cancelled=cancelled
+                settings, lock, current, cancelled=cancelled, retained_profile=retained_profile
             )
             if not activation.applicable and activation.plan is not None:
                 issues.extend(item.message for item in activation.plan.issues)
@@ -193,6 +202,15 @@ def save_update(settings: ClientSettings, plan: WorkspaceUpdate, approval: str) 
         database.transaction(write=True) as transaction,
     ):
         require_workspace_editable(transaction, plan.before.pack_id)
+        if any(
+            record.get("state") not in {"committed", "rolled_back", "aborted", "superseded"}
+            and isinstance(record.get("receipt"), dict)
+            and object_record(record["receipt"]).get("target") == prepared.target
+            for _, record in transaction.list("workspaces.operations")
+        ):
+            raise ModMeshError(
+                ErrorCode.CONFLICT, "An activation is pending; recover before updating"
+            )
         current = Workspace.read(transaction.get("workspaces.items", plan.before.pack_id))
         if current.digest != plan.before.digest or plan.proposed.revision != current.revision + 1:
             raise ModMeshError(ErrorCode.CONFLICT, "Workspace changed after update preview")

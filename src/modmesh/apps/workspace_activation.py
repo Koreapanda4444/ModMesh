@@ -21,12 +21,13 @@ from modmesh.core.downloads import _blocking
 from modmesh.core.games import GameCapability
 from modmesh.core.installation import OperationProgress, OperationResult, _check_cancelled
 from modmesh.core.lockfiles import PackLock
+from modmesh.core.packs import PackEntry
 from modmesh.core.planning import InstallInput
-from modmesh.core.profiles import ProfileManager, ProfilePlan
+from modmesh.core.profiles import Profile, ProfileManager, ProfilePlan
 from modmesh.core.provenance import record_verified_artifact
 from modmesh.core.workspace_history import WorkspaceHistory
 from modmesh.core.workspace_receipts import ActivationReceipt, WorkspaceReceipts
-from modmesh.core.workspaces import document_digest
+from modmesh.core.workspaces import Workspace, document_digest
 from modmesh.domain.models import GameInstallation
 from modmesh.storage.metadata import MetadataStore
 
@@ -107,6 +108,7 @@ async def prepare_locked_workspace(
     installation: GameInstallation,
     *,
     cancelled: threading.Event | None = None,
+    retained_profile: Profile | None = None,
 ) -> WorkspaceActivation:
     cancelled = cancelled or threading.Event()
     pack_id = lock.workspace.pack_id
@@ -126,6 +128,60 @@ async def prepare_locked_workspace(
         binding.get("selection_digest") == lock.workspace.selection_digest
         or binding.get("workspace_digest") == lock.workspace.digest
     )
+    existing_profile = (
+        next(
+            (
+                item
+                for item in manager.profiles()
+                if binding and item.profile_id == binding.get("profile_id")
+            ),
+            None,
+        )
+        if matches
+        else None
+    )
+    if retained_profile is not None and (
+        existing_profile is None
+        or existing_profile.context != manager.context()
+        or profile_configuration_digest(existing_profile) != (binding or {}).get("profile_digest")
+    ):
+        expected_entries = sorted((entry.document() for entry in lock.entries), key=document_digest)
+        actual_entries = sorted(
+            (
+                PackEntry(item.mod, item.rule_id, item.prefix).document()
+                for item in retained_profile.mods
+            ),
+            key=document_digest,
+        )
+        expected_settings = {item.path: item.sha256 for item in lock.workspace.settings}
+        actual_settings = {
+            item.path: item.sha256 for item in retained_profile.files if item.setting
+        }
+        if expected_entries != actual_entries or expected_settings != actual_settings:
+            raise ModMeshError(
+                ErrorCode.CONFLICT, "Historical profile does not match the requested lock"
+            )
+        staged = await _blocking(
+            partial(
+                manager.stage_history_profile,
+                retained_profile,
+                (lock.workspace.name + " restored")[:100],
+            ),
+            cancelled,
+        )
+        binding = {
+            "pack_id": pack_id,
+            "target": target,
+            "workspace_digest": lock.workspace.digest,
+            "selection_digest": lock.workspace.selection_digest,
+            "lock_digest": lock.digest,
+            "profile_id": staged.target.profile_id,
+            "profile_digest": profile_configuration_digest(staged.target),
+            "origin": "history",
+        }
+        with MetadataStore(settings.paths.database) as database:
+            database.put("workspaces.profiles", key, binding)
+        matches = True
     if matches and binding is not None:
         profile = next(
             (item for item in manager.profiles() if item.profile_id == binding.get("profile_id")),
@@ -413,4 +469,15 @@ def active_workspace(settings: ClientSettings, installation: GameInstallation) -
                 raise ModMeshError(ErrorCode.CONFLICT, "Active pack content was modified")
     except (OSError, ModMeshError) as exc:
         return {"state": "unverified", "receipt": value, "issue": str(exc)}
-    return {"state": "active", "receipt": value, "warnings": list(lock.warnings)}
+    with MetadataStore(settings.paths.database) as database:
+        definition = database.get("workspaces.items", receipt.pack_id)
+    desired = Workspace.read(definition) if definition is not None else None
+    return {
+        "state": "active",
+        "receipt": value,
+        "warnings": list(lock.warnings),
+        "active_revision": lock.workspace.revision,
+        "desired_revision": desired.revision if desired else None,
+        "definition_matches_active": desired is not None
+        and desired.digest == lock.workspace.digest,
+    }

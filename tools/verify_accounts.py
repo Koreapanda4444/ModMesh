@@ -370,6 +370,13 @@ def verify():
             workspace_panel.dialog.accept()
             wait()
             assert workspace_panel.workspace.pack_id != stable_id
+            workspace_panel.review_restore()
+            wait()
+            assert workspace_panel.dialog is not None, workspace_panel.status.text()
+            workspace_panel.dialog.acknowledge.setChecked(True)
+            workspace_panel.dialog.accept()
+            wait()
+            assert "이전 모드 구성" in workspace_panel.status.text(), workspace_panel.status.text()
             assert local.exists()
             workspace_panel.close()
             panel.server.setText("http://127.0.0.1")

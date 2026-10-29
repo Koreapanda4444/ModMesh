@@ -32,6 +32,7 @@ from modmesh.apps.workspace_activation import (
 from modmesh.apps.workspace_artifacts import import_local
 from modmesh.apps.workspace_legacy import adopt_profile
 from modmesh.apps.workspace_lifecycle import freeze_workspace
+from modmesh.apps.workspace_restore import WorkspaceRestore, apply_restore, prepare_restore
 from modmesh.apps.workspace_updates import WorkspaceUpdate, prepare_update, save_update
 from modmesh.core.compatibility import inspect_compatibility
 from modmesh.core.config import ClientSettings
@@ -144,6 +145,7 @@ class WorkspacePanel(QWidget):
         self.activation: WorkspaceActivation | None = None
         self.dialog: WorkspaceDialog | BranchDialog | None = None
         self.branch_kinds: dict[str, str] = {}
+        self.histories: dict[str, tuple[PackSnapshot, ...]] = {}
         self.setAcceptDrops(True)
         layout = QVBoxLayout(self)
         title = QLabel("팩 작업공간")
@@ -207,6 +209,13 @@ class WorkspacePanel(QWidget):
         self.fork_button = QPushButton("시험판 분기")
         self.fork_button.clicked.connect(lambda: self.review_branch("fork"))
         row.addWidget(self.fork_button)
+        layout.addLayout(row)
+        row = QHBoxLayout()
+        self.restore_versions = QComboBox()
+        row.addWidget(self.restore_versions, 1)
+        self.restore_button = QPushButton("선택 버전의 모드 구성 복원…")
+        self.restore_button.clicked.connect(self.review_restore)
+        row.addWidget(self.restore_button)
         layout.addLayout(row)
         self.entries = table(("모드", "파일", "출처", "크기", "사용", "버전 정책"))
         self.entries.itemSelectionChanged.connect(self.selected_entry)
@@ -308,6 +317,13 @@ class WorkspacePanel(QWidget):
         self.discard_activation()
         self.entries.setRowCount(0)
         workspace = self.workspace
+        self.restore_versions.clear()
+        if workspace is not None:
+            for snapshot in reversed(self.histories.get(workspace.pack_id, ())):
+                self.restore_versions.addItem(
+                    f"r{snapshot.lock.workspace.revision} · {snapshot.lock.digest[:12]}",
+                    snapshot.lock.digest,
+                )
         if workspace is not None:
             self.entries.setRowCount(len(workspace.entries))
             for index, entry in enumerate(workspace.entries):
@@ -349,6 +365,10 @@ class WorkspacePanel(QWidget):
         self.recover_button.setEnabled(bool(profiles))
         self.update_button.setEnabled(bool(profiles) and editable)
         self.manifest_update_button.setEnabled(bool(profiles) and editable)
+        self.restore_button.setEnabled(
+            bool(profiles) and editable and self.restore_versions.count() > 0
+        )
+        self.restore_versions.setEnabled(not self.busy)
         self.protect_button.setEnabled(enabled and self.workspace is not None)
         self.fork_button.setEnabled(enabled and self.workspace is not None)
         self.protect_button.setText(
@@ -436,6 +456,78 @@ class WorkspacePanel(QWidget):
             applied,
             self.activation_failed,
             name="팩 작업공간 적용",
+        )
+
+    def review_restore(self) -> None:
+        workspace, installation = self.workspace, self.installation
+        snapshot = self.restore_versions.currentData()
+        if workspace is None or installation is None or not snapshot or self.busy:
+            return
+        self.busy = True
+        self.buttons()
+        generation = self.generation
+
+        def reviewed(value: object) -> None:
+            self.busy = False
+            self.buttons()
+            assert isinstance(value, WorkspaceRestore)
+            if generation != self.generation:
+                return
+            if not value.update.applicable or value.update.activation is None:
+                self.status.setText("\n".join(value.update.issues))
+                return
+            self.discard_activation()
+            self.dialog = WorkspaceDialog(value.update.activation, self)
+            self.dialog.setWindowTitle(f"이전 모드 구성 복원 · r{value.source.workspace.revision}")
+            self.dialog.confirm.setText("승인하고 모드 구성 복원")
+            layout = self.dialog.layout()
+            assert layout is not None
+            label = QLabel("모드 구성만 복원합니다. 게임 자체를 이전 버전으로 바꾸지 않습니다.")
+            label.setWordWrap(True)
+            layout.addWidget(label)
+            self.dialog.rejected.connect(self.discard_activation)
+            self.dialog.accepted.connect(lambda: self.perform_restore(value))
+            self.dialog.open()
+
+        self.start(
+            lambda cancelled: run_async(
+                prepare_restore(
+                    self.settings,
+                    workspace.pack_id,
+                    str(snapshot),
+                    installation,
+                    workspace.digest,
+                    cancelled=cancelled,
+                ),
+                cancelled,
+            ),
+            reviewed,
+            self.activation_failed,
+            name="팩 이전 구성 검토",
+        )
+
+    def perform_restore(self, plan: WorkspaceRestore) -> None:
+        self.dialog = None
+        self.busy = True
+        self.buttons()
+
+        def restored(value: object) -> None:
+            assert isinstance(value, ActivationReceipt)
+            self.busy = False
+            self.buttons()
+            self.changed()
+            self.refresh(value.pack_id)
+            self.status.setText(
+                "이전 모드 구성을 새 개정으로 복원했습니다. 게임 버전은 변경하지 않았습니다."
+            )
+
+        self.start(
+            lambda cancelled: apply_restore(
+                self.settings, plan, plan.fingerprint, cancelled=cancelled, progress=report_progress
+            ),
+            restored,
+            self.activation_failed,
+            name="팩 이전 버전 복원",
         )
 
     def review_branch(self, action: str) -> None:
@@ -640,7 +732,9 @@ class WorkspacePanel(QWidget):
             self.selected()
             return
 
-        def work(_cancelled: threading.Event) -> tuple[tuple[Workspace, ...], dict[str, str]]:
+        def work(
+            _cancelled: threading.Event,
+        ) -> tuple[tuple[Workspace, ...], dict[str, str], dict[str, tuple[PackSnapshot, ...]]]:
             with MetadataStore(self.settings.paths.database) as database:
                 items = WorkspaceStore(database).list(installation.game_id)
                 kinds = {
@@ -651,13 +745,16 @@ class WorkspacePanel(QWidget):
                     )
                     for item in items
                 }
-                return items, kinds
+                histories = {
+                    item.pack_id: WorkspaceHistory(database).list(item.pack_id) for item in items
+                }
+                return items, kinds, histories
 
         def loaded(value: object) -> None:
             if generation != self.generation:
                 return
             assert isinstance(value, tuple)
-            self.records, self.branch_kinds = value
+            self.records, self.branch_kinds, self.histories = value
             self.selection.blockSignals(True)
             self.selection.clear()
             for workspace in self.records:

@@ -53,6 +53,7 @@ from modmesh.apps.workspace_legacy import (
     import_manifest_workspace,
 )
 from modmesh.apps.workspace_lifecycle import freeze_workspace
+from modmesh.apps.workspace_restore import apply_restore, prepare_restore
 from modmesh.apps.workspace_updates import prepare_update, save_update
 from modmesh.core.alternatives import find_alternatives
 from modmesh.core.artifact_matching import ArtifactCandidate
@@ -1601,6 +1602,27 @@ async def check_workspace_updates(root: Path) -> None:
     prepared = await prepare_workspace(settings, revised.pack_id, installation, revised.digest)
     apply_workspace(settings, prepared, prepared.fingerprint)
     assert (installation.path / "Pal/Content/Paks/~mods/shared.pak").read_bytes() == b"Bshared.pak"
+    restore = await prepare_restore(
+        settings, revised.pack_id, original_lock, installation, revised.digest
+    )
+    assert restore.update.applicable, restore.update.issues
+    assert restore.document()["game_downgrade_supported"] is False
+    assert (
+        restore.fingerprint
+        == (
+            await prepare_restore(
+                settings, revised.pack_id, original_lock, installation, revised.digest
+            )
+        ).fingerprint
+    )
+    receipt = apply_restore(settings, restore, restore.fingerprint)
+    assert (installation.path / "Pal/Content/Paks/~mods/shared.pak").read_bytes() == b"Ashared.pak"
+    with MetadataStore(settings.paths.database) as database:
+        revised = WorkspaceStore(database).get(revised.pack_id)
+        assert (
+            receipt.lock_digest == WorkspaceHistory(database).list(revised.pack_id)[-1].lock.digest
+        )
+        assert WorkspaceHistory(database).get(original_lock).lock.workspace == first
     with MetadataStore(settings.paths.database) as database:
         branches = WorkspaceBranches(database)
         protect = branches.plan(revised.pack_id, revised.digest, "protect")

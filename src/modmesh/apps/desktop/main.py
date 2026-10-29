@@ -321,6 +321,7 @@ class MainWindow(QMainWindow):
             "팩 설치 적용",
             "팩 작업공간 적용",
             "팩 작업공간 복구",
+            "팩 이전 버전 복원",
         }
         if self.closing:
             worker.cancel()
@@ -340,6 +341,7 @@ class MainWindow(QMainWindow):
             "프로필 전환",
             "팩 설치 적용",
             "팩 버전 적용",
+            "팩 이전 버전 복원",
             "팩 작업공간 적용",
             "팩 작업공간 복구",
         }:
