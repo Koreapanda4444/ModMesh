@@ -6,7 +6,7 @@ from uuid import UUID
 
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.workspace_history import WorkspaceHistory
-from modmesh.core.workspaces import Workspace
+from modmesh.core.workspaces import Workspace, document_digest
 from modmesh.domain.artifacts import FileHash, HashAlgorithm
 from modmesh.storage.installed import integer_record, object_record, string_record
 from modmesh.storage.metadata import MetadataStore
@@ -127,7 +127,9 @@ class WorkspaceReceipts:
             transaction.put("workspaces.operations", receipt.operation_id, record)
         return record
 
-    def complete(self, record: dict[str, object]) -> ActivationReceipt:
+    def complete(
+        self, record: dict[str, object], profile: dict[str, object] | None = None
+    ) -> ActivationReceipt:
         receipt = ActivationReceipt.read(record.get("receipt"))
         lock = WorkspaceHistory(self.database).get(receipt.lock_digest).lock
         if lock.workspace.pack_id != receipt.pack_id:
@@ -142,6 +144,21 @@ class WorkspaceReceipts:
             if existing is not None and existing != receipt.document():
                 raise ModMeshError(ErrorCode.INTEGRITY, "Immutable activation receipt differs")
             transaction.put("workspaces.receipts", receipt.operation_id, receipt.document())
+            if profile is not None:
+                key = receipt.target + ":" + receipt.lock_digest
+                sealed = transaction.get("workspaces.profile_snapshots", key)
+                if sealed is not None and sealed.get("profile_digest") != receipt.profile_digest:
+                    raise ModMeshError(ErrorCode.INTEGRITY, "Historical profile snapshot differs")
+                if sealed is None:
+                    transaction.put(
+                        "workspaces.profile_snapshots",
+                        key,
+                        {
+                            "profile": profile,
+                            "digest": document_digest(profile),
+                            "profile_digest": receipt.profile_digest,
+                        },
+                    )
             transaction.put("workspaces.active", receipt.target, receipt.document())
             transaction.put(
                 "workspaces.operations", receipt.operation_id, {**record, "state": "committed"}

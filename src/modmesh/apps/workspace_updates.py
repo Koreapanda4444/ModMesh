@@ -103,6 +103,7 @@ async def prepare_update(
     _check_cancelled(cancelled.is_set)
     with MetadataStore(settings.paths.database) as database:
         before = WorkspaceStore(database).get(pack_id)
+        branch = database.get("workspaces.branches", pack_id)
         baseline = database.get(
             "workspaces.environments", f"{pack_id}:{activation_target(installation)}"
         )
@@ -129,7 +130,11 @@ async def prepare_update(
         ).document()
     )
     environment = inspect_workspace_environment(settings, before, installation)
-    issues = []
+    issues = (
+        ["Stable pack is protected; fork an experimental pack first"]
+        if branch is not None and branch.get("kind") == "stable"
+        else []
+    )
     replacements = {entry.mod.project.reference: entry for entry in proposed.entries}
     if len(set(allow_pinned)) != len(allow_pinned) or any(
         ref not in {item.mod.project.reference for item in before.entries} for ref in allow_pinned

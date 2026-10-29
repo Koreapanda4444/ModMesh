@@ -23,7 +23,7 @@ from modmesh.core.installation import OperationProgress, OperationResult, _check
 from modmesh.core.lockfiles import PackLock
 from modmesh.core.packs import PackEntry
 from modmesh.core.planning import InstallInput
-from modmesh.core.profiles import Profile, ProfileManager, ProfilePlan
+from modmesh.core.profiles import Profile, ProfileManager, ProfilePlan, profile_record
 from modmesh.core.provenance import record_verified_artifact
 from modmesh.core.workspace_history import WorkspaceHistory
 from modmesh.core.workspace_receipts import ActivationReceipt, WorkspaceReceipts
@@ -316,7 +316,7 @@ def _finish_activation(
         if profile_configuration_digest(profile) != receipt.profile_digest:
             raise ModMeshError(ErrorCode.CONFLICT, "Activated profile content differs from receipt")
         with MetadataStore(settings.paths.database) as database:
-            return WorkspaceReceipts(database).complete(record)
+            return WorkspaceReceipts(database).complete(record, profile_record(profile))
 
 
 def apply_workspace(

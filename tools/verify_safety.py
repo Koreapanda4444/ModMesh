@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import os
+import shutil
 import sqlite3
 import stat
 import subprocess
@@ -47,6 +48,7 @@ from modmesh.apps.workspace_activation import (
     recover_workspace,
 )
 from modmesh.apps.workspace_artifacts import artifact_vault, import_local, local_artifact
+from modmesh.apps.workspace_environment import inspect_workspace_environment
 from modmesh.apps.workspace_legacy import (
     activation_target,
     adopt_profile,
@@ -67,7 +69,7 @@ from modmesh.core.hashing import verify_file
 from modmesh.core.identity import EvidenceKind, IdentityEvidence, IdentityRegistry
 from modmesh.core.installation import InstallationManager
 from modmesh.core.local_files import copy_local
-from modmesh.core.lockfiles import PackLock
+from modmesh.core.lockfiles import PackLock, build_lock
 from modmesh.core.pack_io import export_profile, read_manifest, resolve_pack, write_manifest
 from modmesh.core.pack_versions import diff_manifests, save_version, versions
 from modmesh.core.packs import PackContext, PackEntry, PackManifest, PackSetting
@@ -91,7 +93,7 @@ from modmesh.core.sources import (
 )
 from modmesh.core.workspace_branches import WorkspaceBranches
 from modmesh.core.workspace_history import WorkspaceHistory
-from modmesh.core.workspaces import WorkspaceStore
+from modmesh.core.workspaces import WorkspaceStore, document_digest
 from modmesh.domain.artifacts import FileHash, HashAlgorithm
 from modmesh.domain.dependencies import Dependency, DependencyKind, DependencyTarget
 from modmesh.domain.models import ModFile, ModVersion, Platform, SourceProject, SourceRef
@@ -1644,6 +1646,261 @@ async def check_workspace_updates(root: Path) -> None:
         assert edited.name == "Editable experiment"
 
 
+async def workspace_restore_crash(root: Path, mode: str) -> None:
+    settings, installation, (first, second) = await workspace_setup(root)
+    prepared = await prepare_workspace(settings, first.pack_id, installation, first.digest)
+    source_snapshot = prepared.lock.digest
+    apply_workspace(settings, prepared, prepared.fingerprint)
+    update = await prepare_update(
+        settings,
+        first.pack_id,
+        installation,
+        first.digest,
+        entries=second.entries,
+        allow_pinned=tuple(item.mod.project.reference for item in first.entries),
+    )
+    revised = save_update(settings, update, update.fingerprint)
+    prepared = await prepare_workspace(settings, revised.pack_id, installation, revised.digest)
+    apply_workspace(settings, prepared, prepared.fingerprint)
+    restore = await prepare_restore(
+        settings, revised.pack_id, source_snapshot, installation, revised.digest
+    )
+    publish = profile_engine.publish_file
+
+    def interrupt(temporary: Path, destination: Path) -> None:
+        if mode == "changed":
+            publish(temporary, destination)
+        os._exit(77)
+
+    def interrupt_receipt(*args, **kwargs):
+        os._exit(77)
+
+    if mode == "receipt":
+        workspace_engine._finish_activation = interrupt_receipt
+    else:
+        profile_engine.publish_file = interrupt
+    apply_restore(settings, restore, restore.fingerprint)
+
+
+async def check_workspace_version_safety(root: Path) -> None:
+    settings, initial, (first, second) = await workspace_setup(root / "steamapps/common")
+    manifest = initial.path.parent.parent / "appmanifest_1623730.acf"
+
+    def build(value: str) -> None:
+        manifest.write_text(
+            '"AppState" { "appid" "1623730" "installdir" "Game" "buildid" "' + value + '" }',
+            encoding="utf-8",
+        )
+
+    build("100")
+    loader = initial.path / "Pal/Binaries/Win64/UE4SS.dll"
+    loader.write_bytes(b"loader identity one; never executed")
+    installation = (
+        create_game_registry(settings).get("palworld").inspect(initial.path, Platform.WINDOWS)
+    )
+    assert installation.version.build_id == "100" and installation.loader is not None
+    prepared = await prepare_workspace(settings, first.pack_id, installation, first.digest)
+    assert prepared.lock.game_identity.version_source == "platform_metadata"
+    original_lock = prepared.lock
+    receipt = apply_workspace(settings, prepared, prepared.fingerprint)
+    legacy_document = original_lock.document()
+    legacy_document.pop("game_identity")
+    legacy_document.pop("provenance")
+    assert PackLock.read(legacy_document).digest == document_digest(legacy_document)
+    assert inspect_compatibility(original_lock).state == CompatibilityState.UNKNOWN
+    assert any(
+        item.code == "unknown_dependencies"
+        for item in inspect_compatibility(original_lock).evidence
+    )
+    ref = SourceRef("provider", "unverified-metadata")
+    file = ModFile(
+        ref,
+        "file-1",
+        "provider.pak",
+        first.entries[0].mod.file.size,
+        hashes=first.entries[0].mod.file.hashes,
+    )
+    version = ModVersion(ref, "version-1", None, files=(file,), dependencies_known=False)
+    remote = PackEntry(
+        ResolvedMod(SourceProject(ref, "palworld", "Incomplete provider"), version, file, True),
+        "palworld-pak",
+    )
+    candidate = replace(first, entries=(remote,), disabled=(), unpinned=(), order=())
+    provider_lock = build_lock(
+        candidate,
+        installation,
+        create_game_registry(settings).get("palworld"),
+        load_rules(settings.paths.database).get("palworld"),
+    )
+    assert inspect_compatibility(provider_lock).state == CompatibilityState.UNKNOWN
+    assert provider_lock.provenance[0].document()["acquisition"] == "provider_permission_required"
+    tampered = original_lock.document()
+    tampered["provenance"][0]["file_id"] = "different file"
+    try:
+        PackLock.read(tampered)
+    except ModMeshError:
+        pass
+    else:
+        raise AssertionError("Tampered locked provider identity accepted")
+    marker_before = loader.read_bytes()
+    loader.write_bytes(b"loader identity two; same unknown loader version")
+    assert "identity" in inspect_workspace_environment(settings, first, installation).changes
+    try:
+        apply_workspace(settings, prepared, prepared.fingerprint)
+    except ModMeshError:
+        pass
+    else:
+        raise AssertionError("Changed loader marker accepted with stale approval")
+    loader.write_bytes(marker_before)
+    moved = installation.path.with_name("OldGame")
+    installation.path.rename(moved)
+    shutil.copytree(moved, installation.path)
+    try:
+        assert "root_inode" in inspect_workspace_environment(settings, first, installation).changes
+    finally:
+        shutil.rmtree(installation.path)
+        moved.rename(installation.path)
+    with MetadataStore(settings.paths.database) as database:
+        branches = WorkspaceBranches(database)
+        protect = branches.plan(first.pack_id, first.digest, "protect")
+        branches.apply(protect, protect.fingerprint)
+        fork_plan = branches.plan(first.pack_id, first.digest, "fork", "Game build experiment")
+        experimental = branches.apply(fork_plan, fork_plan.fingerprint)
+    blocked = await prepare_update(settings, first.pack_id, installation, first.digest)
+    assert not blocked.applicable and any("Stable" in issue for issue in blocked.issues)
+    build("200")
+    game_binary = installation.path / "Palworld.exe"
+    game_binary.write_bytes(b"updated game content; never launched")
+    current = (
+        create_game_registry(settings).get("palworld").inspect(installation.path, Platform.WINDOWS)
+    )
+    assert current.version.build_id == "200"
+    try:
+        freeze_workspace(settings, first.pack_id, current, first.digest)
+    except ModMeshError:
+        pass
+    else:
+        raise AssertionError("Game update silently replaced a stable environment baseline")
+    assert active_workspace(settings, current)["state"] == "unverified"
+    with MetadataStore(settings.paths.database) as database:
+        assert WorkspaceHistory(database).get(original_lock.digest).lock == original_lock
+        initial_experiment = WorkspaceHistory(database).list(experimental.pack_id)[0].lock.digest
+    update = await prepare_update(
+        settings,
+        experimental.pack_id,
+        current,
+        experimental.digest,
+        entries=second.entries,
+        allow_pinned=tuple(item.mod.project.reference for item in experimental.entries),
+    )
+    assert update.applicable, update.issues
+    experiment = save_update(settings, update, update.fingerprint)
+    prepared = await prepare_workspace(settings, experiment.pack_id, current, experiment.digest)
+    apply_workspace(settings, prepared, prepared.fingerprint)
+    restore = await prepare_restore(
+        settings, experiment.pack_id, initial_experiment, current, experiment.digest
+    )
+    assert restore.update.applicable, restore.update.issues
+    apply_restore(settings, restore, restore.fingerprint)
+    assert (current.path / "Pal/Content/Paks/~mods/shared.pak").read_bytes() == b"Ashared.pak"
+    assert game_binary.read_bytes() == b"updated game content; never launched"
+    assert (
+        create_game_registry(settings)
+        .get("palworld")
+        .inspect(current.path, Platform.WINDOWS)
+        .version.build_id
+        == "200"
+    )
+    with MetadataStore(settings.paths.database) as database:
+        assert WorkspaceStore(database).get(first.pack_id) == first
+        assert database.get("workspaces.receipts", receipt.operation_id) == receipt.document()
+        assert WorkspaceHistory(database).get(original_lock.digest).lock.context.build_id == "100"
+    for mode in ("before", "receipt", "changed"):
+        crashed = root.parent / ("workspace-restore-crash-" + mode)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "--workspace-restore-crash",
+                str(crashed),
+                mode,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert result.returncode == 77, result.stderr
+        recovered_settings, recovered_installation = workspace_environment(crashed)
+        mods = recovered_installation.path / "Pal/Content/Paks/~mods"
+        if mode == "changed":
+            (mods / "A.pak").write_bytes(b"user edited during interrupted restore")
+        results = recover_workspace(recovered_settings, recovered_installation)
+        expected = (
+            "committed"
+            if mode == "receipt"
+            else "recovery_required"
+            if mode == "changed"
+            else "rolled_back"
+        )
+        assert results and results[0].state == expected, (mode, results)
+        if mode == "changed":
+            assert (mods / "A.pak").read_bytes() == b"user edited during interrupted restore"
+        else:
+            state = active_workspace(recovered_settings, recovered_installation)
+            assert state["state"] == "active"
+            assert state["definition_matches_active"] == (mode == "receipt")
+            assert (mods / "shared.pak").read_bytes() == (
+                b"Ashared.pak" if mode == "receipt" else b"Bshared.pak"
+            )
+        assert (recovered_installation.path / "save.dat").read_bytes() == b"user save"
+        assert (mods / "external.pak").read_bytes() == b"external user mod"
+
+
+async def check_workspace_settings_history(root: Path) -> None:
+    instance = root / "instance"
+    game = instance / "minecraft"
+    game.mkdir(parents=True)
+    (instance / "instance.cfg").write_text("InstanceType=OneSix")
+    (instance / "mmc-pack.json").write_text(
+        json.dumps(
+            {
+                "formatVersion": 1,
+                "components": [
+                    {"uid": "net.minecraft", "version": "1.21.1"},
+                    {"uid": "net.fabricmc.fabric-loader", "version": "0.16.14"},
+                ],
+            }
+        )
+    )
+    options = game / "options.txt"
+    options.write_bytes(b"original selected options")
+    settings = ClientSettings(AppPaths(root / "cfg", root / "data", root / "cache"))
+    games = create_game_registry(settings)
+    installation = games.get("minecraft").inspect(game, Platform.WINDOWS)
+    manager = ProfileManager(games, installation)
+    original = manager.create("Original selected setting", settings=("options.txt",))
+    switch = manager.plan_switch(original.profile_id)
+    manager.switch(switch, switch.fingerprint)
+    workspace = adopt_profile(settings, installation, original.profile_id)
+    activation = await prepare_workspace(
+        settings, workspace.pack_id, installation, workspace.digest
+    )
+    apply_workspace(settings, activation, activation.fingerprint)
+    options.write_bytes(b"later user setting")
+    with MetadataStore(settings.paths.database) as database:
+        empty = WorkspaceStore(database).create("minecraft", "Keep unselected settings")
+    activation_empty = await prepare_workspace(settings, empty.pack_id, installation, empty.digest)
+    apply_workspace(settings, activation_empty, activation_empty.fingerprint)
+    assert options.read_bytes() == b"later user setting"
+    restore = await prepare_restore(
+        settings, workspace.pack_id, activation.lock.digest, installation, workspace.digest
+    )
+    assert restore.update.applicable, restore.update.issues
+    apply_restore(settings, restore, restore.fingerprint)
+    assert options.read_bytes() == b"original selected options"
+
+
 async def check_workspace_import(root: Path) -> None:
     root.mkdir(parents=True)
     settings = ClientSettings(AppPaths(root / "cfg", root / "data", root / "cache"))
@@ -2306,6 +2563,8 @@ async def main() -> None:
         await check_workspace_import(Path(name) / "workspace-import")
         await check_workspace_activation(Path(name) / "workspace-activation")
         await check_workspace_updates(Path(name) / "workspace-updates")
+        await check_workspace_version_safety(Path(name) / "workspace-versions")
+        await check_workspace_settings_history(Path(name) / "workspace-settings")
         check_rule_parsing(Path(name) / "rule-parsing")
         check_rule_discovery(Path(name) / "rule-discovery")
         check_rule_installation(Path(name) / "rule-installation")
@@ -2337,6 +2596,8 @@ if __name__ == "__main__":
         profile_crash(Path(sys.argv[2]), sys.argv[3])
     elif len(sys.argv) == 4 and sys.argv[1] == "--workspace-crash":
         asyncio.run(workspace_crash(Path(sys.argv[2]), sys.argv[3]))
+    elif len(sys.argv) == 4 and sys.argv[1] == "--workspace-restore-crash":
+        asyncio.run(workspace_restore_crash(Path(sys.argv[2]), sys.argv[3]))
     elif len(sys.argv) == 3 and sys.argv[1] == "--cache-worker":
         asyncio.run(cache_worker(Path(sys.argv[2])))
     else:

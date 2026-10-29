@@ -44,7 +44,7 @@ jobs:
         run: modmesh --check
       - name: Exercise server health endpoint
         run: modmesh-server --check
-      - name: Verify file safety and legacy data contracts
+      - name: Verify file safety, version drift and transactional rollback
         run: python tools/verify_safety.py
       - name: Verify server migrations
         run: python tools/verify_server.py

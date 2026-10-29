@@ -97,6 +97,30 @@ modmesh-cli workspace recover --game palworld --path "D:/Games/Palworld"
 
 메일은 `MODMESH_SMTP_HOST`, `MODMESH_SMTP_PORT`, `MODMESH_SMTP_FROM`, `MODMESH_SMTP_USERNAME`, `MODMESH_SMTP_PASSWORD`, `MODMESH_SMTP_TLS`로 설정합니다. 사용자명·비밀번호는 환경 변수로만 받습니다. 기본은 STARTTLS이며 TLS를 끌 수 있는 대상은 loopback뿐입니다. 메일 미설정 시 가입·코드 발급은 사용 불가로 반환합니다. SMTP 프로토콜과 전체 계정 흐름은 로컬 수신기에서 검증하며, 실제 외부 메일 배달은 별도 SMTP 계정으로 확인해야 합니다. `MODMESH_SESSION_SECONDS`는 5분~30일 범위이며 기본은 7일입니다.
 
+## 버전·호환성·업데이트
+
+잠금 파일은 게임 빌드·로더와 출처 프로젝트/버전/파일 ID·해시를 구분해 기록합니다. Steam 빌드와 확인 가능한 런처 메타데이터, 게임 실행 파일·로더 표식의 SHA-256을 근거로 사용합니다. 파일 해시는 바이트 식별이며 실행 파일의 의미상 버전이나 게임 내 동작을 보증하지 않습니다. 버전 근거가 부족하면 미확인으로 남깁니다. 이전 잠금 파일은 그대로 읽으며 기존 스냅샷을 재작성하지 않습니다. 검증한 모드 사본에는 실제 SHA-256과 다운로드 출처를 별도 보관하고, 재배포 권한은 자동 추정하지 않습니다.
+
+`workspace compatibility`는 검사 일시와 범위를 포함한 `confirmed`/`likely`/`unknown`/`conflict` 근거를 반환합니다. `confirmed`는 해당 메타데이터 조건이나 식별 범위에 한하며 실제 게임 로딩은 계속 미검증으로 표시합니다. `workspace environment`에서 등록 당시와 현재의 빌드·로더 파일·게임 폴더 식별·규칙 변경을 조회합니다. 달라졌다면 일반 적용을 차단하고 기존 팩과 파일을 보존합니다.
+
+**현재 환경으로 새 개정 검토**는 선택한 구성을 현재 환경에서 다시 검사합니다. **Manifest로 업데이트 검토**는 사용자가 선택한 정확한 버전의 Manifest를 사용하며, 임의로 최신 버전을 고르지 않습니다. 의존성·설치 파일 충돌·버전 고정을 확인하고 개정 저장을 승인한 뒤 **팩 적용 계획**에서 실제 게임 파일 변경을 승인합니다. 고정된 모드를 바꾸려면 먼저 고정을 풀거나 CLI에서 변경 대상마다 `--allow-pinned SOURCE:PROJECT`를 명시합니다. 파일은 보존된 사본/프로필 또는 검증 캐시에 있어야 하며, 이 흐름의 자동 Provider 다운로드는 아직 연결하지 않았습니다.
+
+```powershell
+modmesh-cli workspace environment --id PACK_ID --path "D:/Games/Palworld" --expected DIGEST
+modmesh-cli workspace compatibility --id PACK_ID --path "D:/Games/Palworld" --expected DIGEST
+modmesh-cli workspace update-plan --id PACK_ID --path "D:/Games/Palworld" --expected DIGEST --file selected-version.json
+modmesh-cli workspace update --id PACK_ID --path "D:/Games/Palworld" --expected DIGEST --file selected-version.json --approve UPDATE_FINGERPRINT
+modmesh-cli workspace protect-plan --id PACK_ID --expected DIGEST
+modmesh-cli workspace protect --id PACK_ID --expected DIGEST --approve BRANCH_FINGERPRINT
+modmesh-cli workspace fork-plan --id PACK_ID --expected DIGEST --name "Trial"
+modmesh-cli workspace fork --id PACK_ID --expected DIGEST --name "Trial" --approve BRANCH_FINGERPRINT
+modmesh-cli workspace history --id PACK_ID
+modmesh-cli workspace restore-plan --id PACK_ID --path "D:/Games/Palworld" --expected DIGEST --snapshot OLD_LOCK_SHA256
+modmesh-cli workspace restore --id PACK_ID --path "D:/Games/Palworld" --expected DIGEST --snapshot OLD_LOCK_SHA256 --approve RESTORE_FINGERPRINT
+```
+
+안정판 고정과 시험판 분기는 현재 개정의 스냅샷이 필요합니다. CLI는 먼저 `workspace snapshot`을 실행하며 GUI는 고정 검토 시 스냅샷을 보존합니다. 안정판은 편집·업데이트·삭제가 차단되고 시험판은 별도 팩 ID와 이력을 가집니다. 보호 해제는 `unprotect-plan`/`unprotect`의 정확한 승인으로 진행합니다. **선택 버전의 모드 구성 복원**은 선택한 과거 구성을 새 개정으로 만들고 트랜잭션으로 적용합니다. 적용 당시 프로필·선택 설정의 복원 자료는 따로 보존합니다. 게임 자체를 다운그레이드하지 않으며 현재 게임에서 명시적으로 충돌하는 구성은 거부합니다. 적용 중단 시 `workspace recover`로 파일과 활성 기록을 복구합니다. 새 개정 저장 후 적용이 중단되면 `active_revision`과 `desired_revision`이 다를 수 있으므로 복구 후 새 적용 계획을 검토합니다.
+
 ## 개발 검증
 
 ARK: Survival Evolved는 `ark-evolved`로 Windows Steam판을 탐지합니다. Steam app ID 346110과 설치 Manifest·실행 파일을 대조하며 Ascended와 다른 판본은 지원하지 않습니다. Steam Workshop 화면에서 `.mod`·게임 모드 폴더·Steam 다운로드 폴더·설치 기록·ActiveMods 설정을 구분해 조회하고 공식 Workshop 구독 페이지를 엽니다. 로컬 기록은 계정의 현재 구독 여부를 보장하지 않으므로 구독·업데이트·제거는 Steam에서 확인합니다. Steam 소유 파일과 설정·세이브는 읽기 전용이며 Workshop 파일 직접 다운로드·복사 설치·프로필 전환은 제공하지 않습니다. 실제 ARK 실행과 계정 구독 상태 확인은 실게임 환경에서 추가 검증해야 합니다.

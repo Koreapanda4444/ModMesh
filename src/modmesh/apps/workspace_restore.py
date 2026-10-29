@@ -12,11 +12,12 @@ from modmesh.core.config import ClientSettings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.installation import OperationProgress, _check_cancelled
 from modmesh.core.lockfiles import PackLock
-from modmesh.core.profiles import ProfileManager
+from modmesh.core.profiles import Profile, ProfileManager
 from modmesh.core.workspace_history import WorkspaceHistory
 from modmesh.core.workspace_receipts import ActivationReceipt
 from modmesh.core.workspaces import WorkspaceStore, document_digest
 from modmesh.domain.models import GameInstallation
+from modmesh.storage.installed import object_record
 from modmesh.storage.metadata import MetadataStore
 
 
@@ -58,6 +59,9 @@ async def prepare_restore(
     with MetadataStore(settings.paths.database) as database:
         current = WorkspaceStore(database).get(pack_id)
         source = WorkspaceHistory(database).get(snapshot).lock
+        sealed = database.get(
+            "workspaces.profile_snapshots", activation_target(installation) + ":" + snapshot
+        )
         receipts = [
             record
             for _, record in database.list("workspaces.receipts")
@@ -71,7 +75,14 @@ async def prepare_restore(
     ):
         raise ModMeshError(ErrorCode.CONFLICT, "Restore snapshot or workspace identity differs")
     retained = None
-    if receipts:
+    if sealed is not None:
+        profile_data = object_record(sealed.get("profile"))
+        if document_digest(profile_data) != sealed.get("digest"):
+            raise ModMeshError(ErrorCode.INTEGRITY, "Immutable historical profile was modified")
+        retained = Profile.read(profile_data)
+        if profile_configuration_digest(retained) != sealed.get("profile_digest"):
+            raise ModMeshError(ErrorCode.INTEGRITY, "Immutable historical configuration differs")
+    elif receipts:
         receipt = max(receipts, key=lambda item: str(item.get("created_at", "")))
         manager = ProfileManager(create_game_registry(settings), installation)
         retained = next(

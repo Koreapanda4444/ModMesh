@@ -144,6 +144,13 @@ class WorkspaceBranches:
                 transaction.put(
                     "workspaces.revisions", selected.pack_id + ":1", {"digest": lock.digest}
                 )
+                for key, value in transaction.list("workspaces.profile_snapshots"):
+                    if key.endswith(":" + source_lock.digest):
+                        transaction.put(
+                            "workspaces.profile_snapshots",
+                            key[: -len(source_lock.digest)] + lock.digest,
+                            value,
+                        )
             record = {
                 **(plan.before or {}),
                 "kind": "stable" if plan.action == "protect" else "experimental",

@@ -384,6 +384,7 @@ class ProfileManager(RemovalManager):
         previous = self._capture(
             store, active, old.name, tuple(item.path for item in old.files if item.setting)
         )
+        previous = replace(previous, context=old.context)
         issues = []
         if target.context != self.context():
             issues.append(
@@ -630,10 +631,8 @@ class ProfileManager(RemovalManager):
         with self._locked(create=True) as store:
             assert store is not None
             self._ready(store)
-            if self._get(store, source.profile_id) != source:
-                raise ModMeshError(
-                    ErrorCode.CONFLICT, "Historical profile changed during restore preview"
-                )
+            if source.context.get("game_id") != self.installation.game_id:
+                raise ModMeshError(ErrorCode.CONFLICT, "Historical profile belongs to another game")
             for item in source.files:
                 proof = snapshot(self._blob(item.sha256))
                 if proof.sha256 != item.sha256 or proof.size != item.size:
