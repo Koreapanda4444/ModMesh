@@ -1653,6 +1653,17 @@ async def check_workspace_import(root: Path) -> None:
     )
     assert not (game / "Pal/Content/Paks/~mods/user.pak").exists()
     assert prepared.document()["changes"]
+    executable = game / "Palworld.exe"
+    original = executable.read_bytes()
+    executable.write_bytes(b"updated executable with same unknown game version")
+    try:
+        freeze_workspace(settings, imported.pack_id, installation, imported.digest)
+    except ModMeshError as exc:
+        assert exc.code == ErrorCode.CONFLICT
+    else:
+        raise AssertionError("Executable drift with unchanged version metadata was ignored")
+    finally:
+        executable.write_bytes(original)
     retained = local_artifact(settings, imported.entries[0].mod.file)
     assert retained.read_bytes() == b"local content"
     with artifact_vault(settings) as vault:

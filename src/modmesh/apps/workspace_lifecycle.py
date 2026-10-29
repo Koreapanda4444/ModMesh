@@ -4,6 +4,7 @@ from pathlib import Path
 
 from modmesh.apps.runtime import create_game_registry
 from modmesh.apps.workspace_artifacts import local_artifact
+from modmesh.apps.workspace_environment import require_workspace_environment
 from modmesh.core.config import ClientSettings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.lockfiles import PackLock, build_lock
@@ -44,6 +45,7 @@ def freeze_workspace(
         else builtin_registry()
     )
     lock = build_lock(workspace, current, adapter, rules.get(workspace.game_id))
+    require_workspace_environment(settings, workspace, current)
     if lock.game_identity is not None:
         with MetadataStore(settings.paths.database) as database:
             database.put(

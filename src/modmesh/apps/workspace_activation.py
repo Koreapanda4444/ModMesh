@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from modmesh.apps.runtime import create_game_registry
 from modmesh.apps.workspace_artifacts import artifact_vault
+from modmesh.apps.workspace_environment import verify_locked_environment
 from modmesh.apps.workspace_legacy import activation_target, profile_configuration_digest
 from modmesh.apps.workspace_lifecycle import freeze_workspace
 from modmesh.core.cache import ArtifactCache, _Lease
@@ -117,8 +118,10 @@ async def prepare_workspace(
             (item for item in manager.profiles() if item.profile_id == binding.get("profile_id")),
             None,
         )
-        if profile is not None and profile_configuration_digest(profile) == binding.get(
-            "profile_digest"
+        if (
+            profile is not None
+            and profile.context == manager.context()
+            and profile_configuration_digest(profile) == binding.get("profile_digest")
         ):
             if manager.active_id() == profile.profile_id:
                 captured = await _blocking(manager.capture_active, cancelled)
@@ -237,6 +240,9 @@ def _finish_activation(
 ) -> ActivationReceipt:
     receipt = ActivationReceipt.read(record.get("receipt"))
     _verify_root(manager, receipt)
+    with MetadataStore(settings.paths.database) as database:
+        locked = WorkspaceHistory(database).get(receipt.lock_digest).lock
+    verify_locked_environment(settings, manager.installation, locked)
     with manager.verified_active(receipt.profile_id) as profile:
         if profile_configuration_digest(profile) != receipt.profile_digest:
             raise ModMeshError(ErrorCode.CONFLICT, "Activated profile content differs from receipt")
@@ -388,6 +394,7 @@ def active_workspace(settings: ClientSettings, installation: GameInstallation) -
     manager = ProfileManager(create_game_registry(settings), installation)
     try:
         _verify_root(manager, receipt)
+        verify_locked_environment(settings, manager.installation, lock)
         with manager.verified_active(receipt.profile_id) as profile:
             if profile_configuration_digest(profile) != receipt.profile_digest:
                 raise ModMeshError(ErrorCode.CONFLICT, "Active pack content was modified")

@@ -15,6 +15,7 @@ from modmesh.apps.workspace_activation import (
     recover_workspace,
 )
 from modmesh.apps.workspace_artifacts import import_local
+from modmesh.apps.workspace_environment import inspect_workspace_environment
 from modmesh.apps.workspace_legacy import adopt_profile, import_manifest_workspace
 from modmesh.apps.workspace_lifecycle import freeze_workspace, write_lock
 from modmesh.core.compatibility import inspect_compatibility
@@ -60,6 +61,7 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
             "active",
             "recover",
             "compatibility",
+            "environment",
         ),
     )
     parser.add_argument("--game")
@@ -130,7 +132,7 @@ def workspace_command(args: argparse.Namespace, settings: ClientSettings) -> int
             adopted = adopt_profile(settings, installation, args.profile, name=args.name)
         print(json.dumps({**adopted.document(), "digest": adopted.digest}, ensure_ascii=False))
         return 0
-    if args.action in {"lock", "snapshot", "compatibility"}:
+    if args.action in {"lock", "snapshot", "compatibility", "environment"}:
         if not args.pack_id or not args.expected or args.path is None:
             raise ModMeshError(
                 ErrorCode.VALIDATION, "Lock preview needs --id, --path and --expected"
@@ -140,6 +142,12 @@ def workspace_command(args: argparse.Namespace, settings: ClientSettings) -> int
         installation = GameLibrary(create_game_registry(settings), settings.paths.database).inspect(
             workspace.game_id, args.path, DiscoveryContext(current_platform())
         )
+        if args.action == "environment":
+            if workspace.digest != args.expected:
+                raise ModMeshError(ErrorCode.CONFLICT, "Workspace changed")
+            drift = inspect_workspace_environment(settings, workspace, installation)
+            print(json.dumps(drift.document(), ensure_ascii=False))
+            return int(bool(drift.changes))
         lock = freeze_workspace(settings, args.pack_id, installation, args.expected)
         if args.action == "compatibility":
             report = inspect_compatibility(lock)
