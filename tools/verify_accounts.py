@@ -345,6 +345,16 @@ def verify():
             workspace_panel.recover_activation()
             wait()
             assert "복구할 중단 작업이 없습니다" in workspace_panel.status.text()
+            old_revision = workspace_panel.workspace.revision
+            workspace_panel.review_update()
+            wait()
+            assert workspace_panel.dialog is not None, workspace_panel.status.text()
+            workspace_panel.dialog.acknowledge.setChecked(True)
+            workspace_panel.dialog.accept()
+            wait()
+            assert workspace_panel.workspace.revision == old_revision + 1, (
+                workspace_panel.status.text()
+            )
             assert local.exists()
             workspace_panel.close()
             panel.server.setText("http://127.0.0.1")

@@ -98,6 +98,19 @@ async def prepare_workspace(
     lock = await _blocking(
         partial(freeze_workspace, settings, pack_id, installation, expected), cancelled
     )
+    return await prepare_locked_workspace(settings, lock, installation, cancelled=cancelled)
+
+
+async def prepare_locked_workspace(
+    settings: ClientSettings,
+    lock: PackLock,
+    installation: GameInstallation,
+    *,
+    cancelled: threading.Event | None = None,
+) -> WorkspaceActivation:
+    cancelled = cancelled or threading.Event()
+    pack_id = lock.workspace.pack_id
+    await _blocking(partial(verify_locked_environment, settings, installation, lock), cancelled)
     games = create_game_registry(settings)
     if GameCapability.PROFILES not in games.get(installation.game_id).capabilities:
         raise ModMeshError(ErrorCode.UNSUPPORTED, "Game does not support managed pack activation")

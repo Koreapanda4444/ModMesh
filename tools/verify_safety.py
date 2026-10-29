@@ -53,6 +53,7 @@ from modmesh.apps.workspace_legacy import (
     import_manifest_workspace,
 )
 from modmesh.apps.workspace_lifecycle import freeze_workspace
+from modmesh.apps.workspace_updates import prepare_update, save_update
 from modmesh.core.alternatives import find_alternatives
 from modmesh.core.artifact_matching import ArtifactCandidate
 from modmesh.core.cache import ArtifactCache
@@ -1565,6 +1566,42 @@ async def check_workspace_activation(root: Path) -> None:
         assert (recovered_installation.path / "save.dat").read_bytes() == b"user save"
 
 
+async def check_workspace_updates(root: Path) -> None:
+    settings, installation, (first, second) = await workspace_setup(root)
+    activated = await prepare_workspace(settings, first.pack_id, installation, first.digest)
+    apply_workspace(settings, activated, activated.fingerprint)
+    original_lock = activated.lock.digest
+    blocked = await prepare_update(
+        settings, first.pack_id, installation, first.digest, entries=second.entries
+    )
+    assert not blocked.applicable and any("Pinned" in item for item in blocked.issues)
+    overrides = tuple(entry.mod.project.reference for entry in first.entries)
+    update = await prepare_update(
+        settings,
+        first.pack_id,
+        installation,
+        first.digest,
+        entries=second.entries,
+        allow_pinned=overrides,
+    )
+    assert update.applicable, update.issues
+    assert update.document()["added"] and update.document()["removed"]
+    try:
+        save_update(settings, update, "wrong fingerprint")
+    except ModMeshError:
+        pass
+    else:
+        raise AssertionError("Unapproved update was saved")
+    revised = save_update(settings, update, update.fingerprint)
+    assert revised.revision == first.revision + 1
+    assert (installation.path / "Pal/Content/Paks/~mods/shared.pak").read_bytes() == b"Ashared.pak"
+    with MetadataStore(settings.paths.database) as database:
+        assert WorkspaceHistory(database).get(original_lock).lock.digest == original_lock
+    prepared = await prepare_workspace(settings, revised.pack_id, installation, revised.digest)
+    apply_workspace(settings, prepared, prepared.fingerprint)
+    assert (installation.path / "Pal/Content/Paks/~mods/shared.pak").read_bytes() == b"Bshared.pak"
+
+
 async def check_workspace_import(root: Path) -> None:
     root.mkdir(parents=True)
     settings = ClientSettings(AppPaths(root / "cfg", root / "data", root / "cache"))
@@ -2226,6 +2263,7 @@ async def main() -> None:
         check_workspace_legacy(Path(name) / "workspace-legacy")
         await check_workspace_import(Path(name) / "workspace-import")
         await check_workspace_activation(Path(name) / "workspace-activation")
+        await check_workspace_updates(Path(name) / "workspace-updates")
         check_rule_parsing(Path(name) / "rule-parsing")
         check_rule_discovery(Path(name) / "rule-discovery")
         check_rule_installation(Path(name) / "rule-installation")

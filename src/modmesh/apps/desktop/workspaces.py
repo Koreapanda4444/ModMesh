@@ -32,9 +32,11 @@ from modmesh.apps.workspace_activation import (
 from modmesh.apps.workspace_artifacts import import_local
 from modmesh.apps.workspace_legacy import adopt_profile
 from modmesh.apps.workspace_lifecycle import freeze_workspace
+from modmesh.apps.workspace_updates import WorkspaceUpdate, prepare_update, save_update
 from modmesh.core.compatibility import inspect_compatibility
 from modmesh.core.config import ClientSettings
 from modmesh.core.games import GameCapability, GameRegistry
+from modmesh.core.pack_io import read_manifest
 from modmesh.core.packs import PackEntry
 from modmesh.core.profiles import Profile
 from modmesh.core.workspace_history import PackSnapshot, WorkspaceHistory
@@ -45,7 +47,9 @@ from modmesh.storage.metadata import MetadataStore
 
 
 class WorkspaceDialog(QDialog):
-    def __init__(self, prepared: WorkspaceActivation, parent: QWidget) -> None:
+    def __init__(
+        self, prepared: WorkspaceActivation, parent: QWidget, *, definition_only: bool = False
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("팩 적용 계획")
         self.resize(850, 610)
@@ -71,7 +75,9 @@ class WorkspaceDialog(QDialog):
                     *((item.message for item in prepared.plan.issues) if prepared.plan else ()),
                     *prepared.lock.warnings,
                     *(prepared.plan.warnings if prepared.plan else ()),
-                    "이미 활성화된 구성입니다."
+                    "새 개정을 저장합니다. 게임 파일 적용은 별도로 승인합니다."
+                    if definition_only
+                    else "이미 활성화된 구성입니다."
                     if prepared.plan is None
                     else "게임 파일을 변경합니다.",
                     f"승인 식별: {prepared.fingerprint}",
@@ -152,6 +158,14 @@ class WorkspacePanel(QWidget):
         self.recover_button = QPushButton("중단된 팩 복구")
         self.recover_button.clicked.connect(self.recover_activation)
         row.addWidget(self.recover_button)
+        layout.addLayout(row)
+        row = QHBoxLayout()
+        self.update_button = QPushButton("현재 환경으로 새 개정 검토")
+        self.update_button.clicked.connect(lambda: self.review_update())
+        row.addWidget(self.update_button)
+        self.manifest_update_button = QPushButton("Manifest로 업데이트 검토…")
+        self.manifest_update_button.clicked.connect(self.choose_update_manifest)
+        row.addWidget(self.manifest_update_button)
         layout.addLayout(row)
         self.entries = table(("모드", "파일", "출처", "크기", "사용", "버전 정책"))
         self.entries.itemSelectionChanged.connect(self.selected_entry)
@@ -285,6 +299,8 @@ class WorkspacePanel(QWidget):
         self.adopt_button.setEnabled(enabled and self.legacy_profile.count() > 0)
         self.preview_button.setEnabled(bool(profiles) and self.workspace is not None)
         self.recover_button.setEnabled(bool(profiles))
+        self.update_button.setEnabled(bool(profiles) and self.workspace is not None)
+        self.manifest_update_button.setEnabled(bool(profiles) and self.workspace is not None)
         self.selected_entry()
 
     def discard_activation(self) -> None:
@@ -365,6 +381,84 @@ class WorkspacePanel(QWidget):
             applied,
             self.activation_failed,
             name="팩 작업공간 적용",
+        )
+
+    def choose_update_manifest(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "업데이트할 정확한 Manifest", filter="JSON (*.json)"
+        )
+        if path:
+            self.review_update(Path(path))
+
+    def review_update(self, file: Path | None = None) -> None:
+        workspace, installation = self.workspace, self.installation
+        if workspace is None or installation is None or self.busy:
+            return
+        self.busy = True
+        self.buttons()
+        generation = self.generation
+
+        async def work(cancelled: threading.Event) -> WorkspaceUpdate:
+            candidate = read_manifest(file) if file else None
+            return await prepare_update(
+                self.settings,
+                workspace.pack_id,
+                installation,
+                workspace.digest,
+                entries=candidate.entries if candidate else None,
+                settings_files=candidate.settings if candidate else None,
+                cancelled=cancelled,
+            )
+
+        def reviewed(value: object) -> None:
+            self.busy = False
+            self.buttons()
+            assert isinstance(value, WorkspaceUpdate)
+            if (
+                generation != self.generation
+                or self.workspace is None
+                or self.workspace.digest != workspace.digest
+            ):
+                return
+            if not value.applicable or value.activation is None:
+                self.status.setText("\n".join(value.issues))
+                return
+            self.discard_activation()
+            self.dialog = WorkspaceDialog(value.activation, self, definition_only=True)
+            self.dialog.setWindowTitle(
+                f"개정 검토 · r{value.before.revision} → r{value.proposed.revision}"
+            )
+            self.dialog.confirm.setText("승인하고 개정 저장")
+            self.dialog.accepted.connect(lambda: self.save_reviewed_update(value))
+            self.dialog.rejected.connect(self.discard_activation)
+            self.dialog.open()
+
+        self.start(
+            lambda cancelled: run_async(work(cancelled), cancelled),
+            reviewed,
+            self.activation_failed,
+            name="팩 업데이트 검토",
+        )
+
+    def save_reviewed_update(self, plan: WorkspaceUpdate) -> None:
+        self.dialog = None
+        self.busy = True
+        self.buttons()
+
+        def saved(value: object) -> None:
+            assert isinstance(value, Workspace)
+            self.busy = False
+            self.buttons()
+            self.refresh(value.pack_id)
+            self.status.setText(
+                "새 개정을 저장했습니다. 게임 파일 변경은 팩 적용 계획에서 승인하세요."
+            )
+
+        self.start(
+            lambda _cancelled: save_update(self.settings, plan, plan.fingerprint),
+            saved,
+            self.activation_failed,
+            name="팩 업데이트 개정 저장",
         )
 
     def recover_activation(self) -> None:

@@ -18,6 +18,7 @@ from modmesh.apps.workspace_artifacts import import_local
 from modmesh.apps.workspace_environment import inspect_workspace_environment
 from modmesh.apps.workspace_legacy import adopt_profile, import_manifest_workspace
 from modmesh.apps.workspace_lifecycle import freeze_workspace, write_lock
+from modmesh.apps.workspace_updates import prepare_update, save_update
 from modmesh.core.compatibility import inspect_compatibility
 from modmesh.core.config import ClientSettings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
@@ -62,6 +63,8 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
             "recover",
             "compatibility",
             "environment",
+            "update-plan",
+            "update",
         ),
     )
     parser.add_argument("--game")
@@ -79,9 +82,50 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
     parser.add_argument("--output", type=Path)
     parser.add_argument("--snapshot")
     parser.add_argument("--profile")
+    parser.add_argument(
+        "--allow-pinned", action="append", default=[], help="Explicit SOURCE:PROJECT pin override"
+    )
 
 
 def workspace_command(args: argparse.Namespace, settings: ClientSettings) -> int:
+    if args.action in {"update-plan", "update"}:
+        if not args.pack_id or args.path is None or not args.expected:
+            raise ModMeshError(ErrorCode.VALIDATION, "Update needs --id, --path and --expected")
+        with MetadataStore(settings.paths.database) as database:
+            workspace = WorkspaceStore(database).get(args.pack_id)
+        installation = GameLibrary(create_game_registry(settings), settings.paths.database).inspect(
+            workspace.game_id, args.path, DiscoveryContext(current_platform())
+        )
+        candidate = read_manifest(args.file) if args.file else None
+        if candidate is not None and candidate.context.game_id != workspace.game_id:
+            raise ModMeshError(ErrorCode.CONFLICT, "Update manifest belongs to another game")
+        overrides = tuple(
+            SourceRef(*value.split(":", 1)) for value in args.allow_pinned if ":" in value
+        )
+        if len(overrides) != len(args.allow_pinned):
+            raise ModMeshError(ErrorCode.VALIDATION, "Pin overrides use SOURCE:PROJECT")
+        update = asyncio.run(
+            prepare_update(
+                settings,
+                args.pack_id,
+                installation,
+                args.expected,
+                entries=candidate.entries if candidate else None,
+                settings_files=candidate.settings if candidate else None,
+                allow_pinned=overrides,
+            )
+        )
+        if args.action == "update":
+            saved = save_update(settings, update, args.approve or "")
+            print(
+                json.dumps(
+                    {**saved.document(), "digest": saved.digest, "game_files_changed": False},
+                    ensure_ascii=False,
+                )
+            )
+            return 0
+        print(json.dumps(update.document(), ensure_ascii=False))
+        return int(not update.applicable)
     if args.action in {"active", "recover"}:
         if not args.game or args.path is None:
             raise ModMeshError(ErrorCode.VALIDATION, "Select --game and --path")
