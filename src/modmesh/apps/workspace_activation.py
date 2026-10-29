@@ -21,6 +21,7 @@ from modmesh.core.installation import OperationProgress, OperationResult, _check
 from modmesh.core.lockfiles import PackLock
 from modmesh.core.planning import InstallInput
 from modmesh.core.profiles import ProfileManager, ProfilePlan
+from modmesh.core.provenance import record_verified_artifact
 from modmesh.core.workspace_history import WorkspaceHistory
 from modmesh.core.workspace_receipts import ActivationReceipt, WorkspaceReceipts
 from modmesh.core.workspaces import document_digest
@@ -163,6 +164,8 @@ async def prepare_workspace(
                     "Artifact unavailable; acquire the exact permitted source file first",
                 )
             inputs.append(InstallInput(entry.mod, artifact.path, entry.rule_id, entry.prefix))
+            with MetadataStore(settings.paths.database) as database:
+                record_verified_artifact(database, entry, artifact)
         payload = await _blocking(
             partial(
                 manager.payload_plan, lock.resolution(), tuple(inputs), cancelled=cancelled.is_set

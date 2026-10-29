@@ -72,6 +72,7 @@ from modmesh.core.planning import InstallationPlanner, InstallInput
 from modmesh.core.priorities import SourcePriorities
 from modmesh.core.processes import java_guard
 from modmesh.core.profiles import Profile, ProfileManager, profile_record
+from modmesh.core.provenance import verified_provenance
 from modmesh.core.removal import RemovalManager
 from modmesh.core.resolver import DependencyEdge, DependencyResolution, ResolvedMod
 from modmesh.core.rule_io import parse_rule, read_rule
@@ -1603,6 +1604,11 @@ async def check_workspace_import(root: Path) -> None:
     assert lock.game_identity is not None and len(lock.game_identity.files) == 2
     assert lock.game_identity.version_source == "unknown"
     assert all(item.role == "executable" for item in lock.game_identity.files)
+    assert lock.provenance is not None and len(lock.provenance) == 1
+    with MetadataStore(settings.paths.database) as database:
+        evidence = verified_provenance(database, lock.provenance[0])
+        assert evidence is not None and evidence["redistribution"] == "not_recorded"
+        assert str(root) not in json.dumps(evidence)
     assert (
         lock.digest
         == freeze_workspace(settings, imported.pack_id, installation, imported.digest).digest

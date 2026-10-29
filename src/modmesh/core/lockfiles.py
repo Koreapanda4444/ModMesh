@@ -8,6 +8,7 @@ from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.game_identity import GameIdentity, capture_game_identity
 from modmesh.core.games import GameAdapter
 from modmesh.core.packs import MAX_MANIFEST_BYTES, PackContext, PackEntry, _pairs
+from modmesh.core.provenance import ArtifactProvenance
 from modmesh.core.resolver import DependencyEdge, DependencyResolution
 from modmesh.core.rules import RegisteredRule
 from modmesh.core.workspaces import Workspace, document_digest
@@ -26,6 +27,7 @@ class PackLock:
     entries: tuple[PackEntry, ...]
     warnings: tuple[str, ...]
     game_identity: GameIdentity | None = None
+    provenance: tuple[ArtifactProvenance, ...] | None = None
 
     def document(self) -> dict[str, object]:
         result: dict[str, object] = {
@@ -39,6 +41,8 @@ class PackLock:
         }
         if self.game_identity is not None:
             result["game_identity"] = self.game_identity.document()
+        if self.provenance is not None:
+            result["provenance"] = [item.document() for item in self.provenance]
         return result
 
     @property
@@ -57,7 +61,7 @@ class PackLock:
     def read(cls, value: object) -> PackLock:
         data = object_record(value)
         if (
-            set(data) - {"game_identity"}
+            set(data) - {"game_identity", "provenance"}
             != {"schema_version", "kind", "workspace", "context", "rule", "entries", "warnings"}
             or integer_record(data["schema_version"]) != 2
             or data["kind"] != "modmesh-lock"
@@ -93,6 +97,15 @@ class PackLock:
         )
         if game_identity is not None and game_identity.context != context:
             raise ModMeshError(ErrorCode.CONFLICT, "Game identity and lock context differ")
+        provenance = None
+        if "provenance" in data:
+            raw = array_record(data["provenance"])
+            if len(raw) != len(entries):
+                raise ModMeshError(ErrorCode.INTEGRITY, "Locked provenance count differs")
+            provenance = tuple(
+                ArtifactProvenance.read(item, entry)
+                for item, entry in zip(raw, entries, strict=True)
+            )
         return cls(
             workspace,
             context,
@@ -101,6 +114,7 @@ class PackLock:
             entries,
             warnings,
             game_identity,
+            provenance,
         )
 
     @classmethod
@@ -170,6 +184,7 @@ def build_lock(
         tuple(entries),
         (),
         capture_game_identity(installation, rule.rule),
+        tuple(ArtifactProvenance(entry) for entry in entries),
     )
     conflicts = analyze_dependencies(lock.resolution())
     if conflicts.blocked:
@@ -188,5 +203,6 @@ def build_lock(
             lock.entries,
             tuple(sorted(set(warnings))),
             lock.game_identity,
+            lock.provenance,
         ).dumps()
     )

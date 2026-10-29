@@ -17,6 +17,7 @@ from modmesh.core.hashing import verify_file
 from modmesh.core.local_files import copy_local
 from modmesh.core.packs import PackEntry
 from modmesh.core.planning import ArchivePolicy, portable_path
+from modmesh.core.provenance import record_verified_artifact
 from modmesh.core.resolver import ResolvedMod
 from modmesh.core.workspaces import Workspace, WorkspaceStore
 from modmesh.domain.models import ModFile, ModVersion, SourceProject, SourceRef
@@ -117,6 +118,7 @@ async def import_local(
     if cancelled.is_set():
         raise ModMeshError(ErrorCode.CANCELLED, "Local import cancelled")
     with MetadataStore(settings.paths.database) as database:
+        record_verified_artifact(database, PackEntry(mod), retained)
         return WorkspaceStore(database).save(
             replace(
                 workspace,
