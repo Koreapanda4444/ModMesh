@@ -25,6 +25,7 @@ from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.discovery import current_platform
 from modmesh.core.games import DiscoveryContext
 from modmesh.core.pack_io import read_manifest
+from modmesh.core.workspace_branches import WorkspaceBranches
 from modmesh.core.workspace_history import WorkspaceHistory
 from modmesh.core.workspaces import WorkspaceStore
 from modmesh.domain.models import SourceRef
@@ -65,6 +66,13 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
             "environment",
             "update-plan",
             "update",
+            "protect-plan",
+            "protect",
+            "unprotect-plan",
+            "unprotect",
+            "fork-plan",
+            "fork",
+            "branch-info",
         ),
     )
     parser.add_argument("--game")
@@ -88,6 +96,38 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
 
 
 def workspace_command(args: argparse.Namespace, settings: ClientSettings) -> int:
+    if args.action in {
+        "protect-plan",
+        "protect",
+        "unprotect-plan",
+        "unprotect",
+        "fork-plan",
+        "fork",
+        "branch-info",
+    }:
+        if not args.pack_id:
+            raise ModMeshError(ErrorCode.VALIDATION, "Select --id PACK_ID")
+        with MetadataStore(settings.paths.database) as database:
+            if args.action == "branch-info":
+                branch_result = database.get("workspaces.branches", args.pack_id) or {
+                    "kind": "editable"
+                }
+            else:
+                if not args.expected:
+                    raise ModMeshError(
+                        ErrorCode.VALIDATION, "Branch changes need --expected DIGEST"
+                    )
+                branches = WorkspaceBranches(database)
+                branch_plan = branches.plan(
+                    args.pack_id, args.expected, args.action.removesuffix("-plan"), args.name
+                )
+                if args.action.endswith("-plan"):
+                    branch_result = branch_plan.document()
+                else:
+                    changed = branches.apply(branch_plan, args.approve or "")
+                    branch_result = {**changed.document(), "digest": changed.digest}
+        print(json.dumps(branch_result, ensure_ascii=False))
+        return 0
     if args.action in {"update-plan", "update"}:
         if not args.pack_id or args.path is None or not args.expected:
             raise ModMeshError(ErrorCode.VALIDATION, "Update needs --id, --path and --expected")

@@ -39,6 +39,7 @@ from modmesh.core.games import GameCapability, GameRegistry
 from modmesh.core.pack_io import read_manifest
 from modmesh.core.packs import PackEntry
 from modmesh.core.profiles import Profile
+from modmesh.core.workspace_branches import BranchPlan, WorkspaceBranches
 from modmesh.core.workspace_history import PackSnapshot, WorkspaceHistory
 from modmesh.core.workspace_receipts import ActivationReceipt
 from modmesh.core.workspaces import Workspace, WorkspaceStore
@@ -98,6 +99,33 @@ class WorkspaceDialog(QDialog):
         layout.addWidget(buttons)
 
 
+class BranchDialog(QDialog):
+    def __init__(self, plan: BranchPlan, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("팩 분기 검토")
+        layout = QVBoxLayout(self)
+        text = (
+            "안정판 편집 보호를 해제합니다."
+            if plan.action == "unprotect"
+            else "현재 개정을 안정판으로 고정하고 편집을 차단합니다."
+            if plan.action == "protect"
+            else f"별도 시험판 '{plan.fork.name if plan.fork else ''}'을 만듭니다. "
+            "원본 팩은 보존합니다."
+        )
+        note = QLabel(text + "\n게임 파일은 변경하지 않습니다.")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        self.acknowledge = QCheckBox("선택한 분기 변경을 확인했습니다.")
+        layout.addWidget(self.acknowledge)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
+        self.confirm = buttons.addButton("승인하고 저장", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.confirm.setEnabled(False)
+        self.acknowledge.toggled.connect(self.confirm.setEnabled)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+
 class WorkspacePanel(QWidget):
     def __init__(
         self,
@@ -114,7 +142,8 @@ class WorkspacePanel(QWidget):
         self.changed = changed or (lambda: None)
         self.busy = False
         self.activation: WorkspaceActivation | None = None
-        self.dialog: WorkspaceDialog | None = None
+        self.dialog: WorkspaceDialog | BranchDialog | None = None
+        self.branch_kinds: dict[str, str] = {}
         self.setAcceptDrops(True)
         layout = QVBoxLayout(self)
         title = QLabel("팩 작업공간")
@@ -166,6 +195,18 @@ class WorkspacePanel(QWidget):
         self.manifest_update_button = QPushButton("Manifest로 업데이트 검토…")
         self.manifest_update_button.clicked.connect(self.choose_update_manifest)
         row.addWidget(self.manifest_update_button)
+        self.protect_button = QPushButton("안정판 고정")
+        self.protect_button.clicked.connect(
+            lambda: self.review_branch(
+                "unprotect"
+                if self.workspace and self.branch_kinds.get(self.workspace.pack_id) == "stable"
+                else "protect"
+            )
+        )
+        row.addWidget(self.protect_button)
+        self.fork_button = QPushButton("시험판 분기")
+        self.fork_button.clicked.connect(lambda: self.review_branch("fork"))
+        row.addWidget(self.fork_button)
         layout.addLayout(row)
         self.entries = table(("모드", "파일", "출처", "크기", "사용", "버전 정책"))
         self.entries.itemSelectionChanged.connect(self.selected_entry)
@@ -209,7 +250,11 @@ class WorkspacePanel(QWidget):
         self.strategy.clear()
         self.strategy.addItem("단일 배치는 자동 선택", None)
         for button in (self.toggle, self.pin, self.recipe_button):
-            button.setEnabled(entry is not None and not self.busy)
+            button.setEnabled(
+                entry is not None
+                and not self.busy
+                and (workspace is None or self.branch_kinds.get(workspace.pack_id) != "stable")
+            )
         if entry is None or workspace is None or installation is None:
             return
         for rule in self.games.get(installation.game_id).installation_rules(
@@ -290,17 +335,27 @@ class WorkspacePanel(QWidget):
             else frozenset()
         )
         profiles = enabled and GameCapability.PROFILES in capabilities
+        editable = (
+            self.workspace is not None and self.branch_kinds.get(self.workspace.pack_id) != "stable"
+        )
         self.selection.setEnabled(not self.busy)
         self.create_button.setEnabled(enabled)
         self.add_button.setEnabled(
-            enabled and self.workspace is not None and GameCapability.INSTALL_RULES in capabilities
+            enabled and editable and GameCapability.INSTALL_RULES in capabilities
         )
         self.snapshot_button.setEnabled(enabled and self.workspace is not None)
         self.adopt_button.setEnabled(enabled and self.legacy_profile.count() > 0)
         self.preview_button.setEnabled(bool(profiles) and self.workspace is not None)
         self.recover_button.setEnabled(bool(profiles))
-        self.update_button.setEnabled(bool(profiles) and self.workspace is not None)
-        self.manifest_update_button.setEnabled(bool(profiles) and self.workspace is not None)
+        self.update_button.setEnabled(bool(profiles) and editable)
+        self.manifest_update_button.setEnabled(bool(profiles) and editable)
+        self.protect_button.setEnabled(enabled and self.workspace is not None)
+        self.fork_button.setEnabled(enabled and self.workspace is not None)
+        self.protect_button.setText(
+            "안정판 보호 해제"
+            if self.workspace and self.branch_kinds.get(self.workspace.pack_id) == "stable"
+            else "안정판 고정"
+        )
         self.selected_entry()
 
     def discard_activation(self) -> None:
@@ -382,6 +437,59 @@ class WorkspacePanel(QWidget):
             self.activation_failed,
             name="팩 작업공간 적용",
         )
+
+    def review_branch(self, action: str) -> None:
+        workspace, installation = self.workspace, self.installation
+        if workspace is None or installation is None or self.busy:
+            return
+        self.busy = True
+        self.buttons()
+        generation = self.generation
+        name = self.name.text().strip() or None
+
+        def work(_cancelled: threading.Event) -> BranchPlan:
+            if action == "protect":
+                lock = freeze_workspace(
+                    self.settings, workspace.pack_id, installation, workspace.digest
+                )
+                with MetadataStore(self.settings.paths.database) as database:
+                    WorkspaceHistory(database).capture(lock)
+            with MetadataStore(self.settings.paths.database) as database:
+                return WorkspaceBranches(database).plan(
+                    workspace.pack_id, workspace.digest, action, name
+                )
+
+        def prepared(value: object) -> None:
+            self.busy = False
+            self.buttons()
+            assert isinstance(value, BranchPlan)
+            if generation != self.generation:
+                return
+            self.discard_activation()
+            self.dialog = BranchDialog(value, self)
+            self.dialog.rejected.connect(self.discard_activation)
+            self.dialog.accepted.connect(lambda: self.save_branch(value))
+            self.dialog.open()
+
+        self.start(work, prepared, self.activation_failed, name="팩 분기 검토")
+
+    def save_branch(self, plan: BranchPlan) -> None:
+        self.dialog = None
+        self.busy = True
+        self.buttons()
+
+        def work(_cancelled: threading.Event) -> Workspace:
+            with MetadataStore(self.settings.paths.database) as database:
+                return WorkspaceBranches(database).apply(plan, plan.fingerprint)
+
+        def saved(value: object) -> None:
+            assert isinstance(value, Workspace)
+            self.busy = False
+            self.buttons()
+            self.refresh(value.pack_id)
+            self.status.setText("팩 분기 변경을 저장했습니다. 게임 파일은 변경하지 않았습니다.")
+
+        self.start(work, saved, self.activation_failed, name="팩 분기 저장")
 
     def choose_update_manifest(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -532,20 +640,31 @@ class WorkspacePanel(QWidget):
             self.selected()
             return
 
-        def work(_cancelled: threading.Event) -> tuple[Workspace, ...]:
+        def work(_cancelled: threading.Event) -> tuple[tuple[Workspace, ...], dict[str, str]]:
             with MetadataStore(self.settings.paths.database) as database:
-                return WorkspaceStore(database).list(installation.game_id)
+                items = WorkspaceStore(database).list(installation.game_id)
+                kinds = {
+                    item.pack_id: str(
+                        (database.get("workspaces.branches", item.pack_id) or {}).get(
+                            "kind", "editable"
+                        )
+                    )
+                    for item in items
+                }
+                return items, kinds
 
         def loaded(value: object) -> None:
             if generation != self.generation:
                 return
             assert isinstance(value, tuple)
-            self.records = value
+            self.records, self.branch_kinds = value
             self.selection.blockSignals(True)
             self.selection.clear()
             for workspace in self.records:
                 self.selection.addItem(
-                    f"{workspace.name} · r{workspace.revision}", workspace.pack_id
+                    f"{workspace.name} · r{workspace.revision} · "
+                    f"{self.branch_kinds.get(workspace.pack_id, 'editable')}",
+                    workspace.pack_id,
                 )
             self.selection.setCurrentIndex(max(0, self.selection.findData(selected)))
             self.selection.blockSignals(False)

@@ -88,6 +88,7 @@ from modmesh.core.sources import (
     SourceDescriptor,
     SourceRegistry,
 )
+from modmesh.core.workspace_branches import WorkspaceBranches
 from modmesh.core.workspace_history import WorkspaceHistory
 from modmesh.core.workspaces import WorkspaceStore
 from modmesh.domain.artifacts import FileHash, HashAlgorithm
@@ -1600,6 +1601,25 @@ async def check_workspace_updates(root: Path) -> None:
     prepared = await prepare_workspace(settings, revised.pack_id, installation, revised.digest)
     apply_workspace(settings, prepared, prepared.fingerprint)
     assert (installation.path / "Pal/Content/Paks/~mods/shared.pak").read_bytes() == b"Bshared.pak"
+    with MetadataStore(settings.paths.database) as database:
+        branches = WorkspaceBranches(database)
+        protect = branches.plan(revised.pack_id, revised.digest, "protect")
+        branches.apply(protect, protect.fingerprint)
+        try:
+            WorkspaceStore(database).rename(
+                revised.pack_id, "Unapproved stable edit", revised.digest
+            )
+        except ModMeshError:
+            pass
+        else:
+            raise AssertionError("Stable branch was changed without approval")
+        assert not WorkspaceStore(database).deletion_plan(revised.pack_id).applicable
+        fork_plan = branches.plan(revised.pack_id, revised.digest, "fork", "Experimental update")
+        fork = branches.apply(fork_plan, fork_plan.fingerprint)
+        assert fork.pack_id != revised.pack_id and fork.revision == 1
+        assert WorkspaceStore(database).get(revised.pack_id) == revised
+        edited = WorkspaceStore(database).rename(fork.pack_id, "Editable experiment", fork.digest)
+        assert edited.name == "Editable experiment"
 
 
 async def check_workspace_import(root: Path) -> None:

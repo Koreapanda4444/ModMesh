@@ -355,6 +355,21 @@ def verify():
             assert workspace_panel.workspace.revision == old_revision + 1, (
                 workspace_panel.status.text()
             )
+            stable_id = workspace_panel.workspace.pack_id
+            workspace_panel.review_branch("protect")
+            wait()
+            assert workspace_panel.dialog is not None, workspace_panel.status.text()
+            workspace_panel.dialog.acknowledge.setChecked(True)
+            workspace_panel.dialog.accept()
+            wait()
+            assert not workspace_panel.update_button.isEnabled()
+            workspace_panel.review_branch("fork")
+            wait()
+            assert workspace_panel.dialog is not None, workspace_panel.status.text()
+            workspace_panel.dialog.acknowledge.setChecked(True)
+            workspace_panel.dialog.accept()
+            wait()
+            assert workspace_panel.workspace.pack_id != stable_id
             assert local.exists()
             workspace_panel.close()
             panel.server.setText("http://127.0.0.1")

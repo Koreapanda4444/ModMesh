@@ -11,7 +11,16 @@ from modmesh.domain.models import SourceRef
 from modmesh.domain.validation import require_id
 from modmesh.domain.workspaces import PackIdentity
 from modmesh.storage.installed import array_record, integer_record, object_record, string_record
-from modmesh.storage.metadata import MetadataStore
+from modmesh.storage.metadata import MetadataStore, MetadataTransaction
+
+
+def require_workspace_editable(transaction: MetadataTransaction, pack_id: str) -> None:
+    branch = transaction.get("workspaces.branches", pack_id)
+    if branch is not None and branch.get("kind") == "stable":
+        raise ModMeshError(
+            ErrorCode.CONFLICT,
+            "Stable pack is protected; fork an experimental pack or approve unprotecting it",
+        )
 
 
 def document_digest(value: object) -> str:
@@ -200,6 +209,7 @@ class WorkspaceStore:
     def save(self, workspace: Workspace, expected: str) -> Workspace:
         workspace = Workspace.read(workspace.document())
         with self.database.transaction(write=True) as transaction:
+            require_workspace_editable(transaction, workspace.pack_id)
             record = transaction.get("workspaces.items", workspace.pack_id)
             current = Workspace.read(record)
             if (
@@ -303,6 +313,11 @@ class WorkspaceStore:
         return tuple(
             self.database.list("workspaces.active")
             + [
+                ("stable:" + key, {"pack_id": key})
+                for key, value in self.database.list("workspaces.branches")
+                if value.get("kind") == "stable"
+            ]
+            + [
                 (key, object_record(record.get("receipt")))
                 for key, record in self.database.list("workspaces.operations")
                 if record.get("state") not in {"committed", "rolled_back", "aborted", "superseded"}
@@ -311,6 +326,7 @@ class WorkspaceStore:
 
     def delete(self, pack_id: str, approval: str) -> None:
         with self.database.transaction(write=True) as transaction:
+            require_workspace_editable(transaction, pack_id)
             workspace = Workspace.read(transaction.get("workspaces.items", pack_id))
             plan = WorkspaceDeletion(
                 workspace,

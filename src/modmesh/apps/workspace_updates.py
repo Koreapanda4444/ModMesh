@@ -19,7 +19,12 @@ from modmesh.core.lockfiles import build_lock
 from modmesh.core.packs import PackEntry, PackSetting
 from modmesh.core.workspace_history import PackSnapshot
 from modmesh.core.workspace_receipts import WorkspaceReceipts
-from modmesh.core.workspaces import Workspace, WorkspaceStore, document_digest
+from modmesh.core.workspaces import (
+    Workspace,
+    WorkspaceStore,
+    document_digest,
+    require_workspace_editable,
+)
 from modmesh.domain.models import GameInstallation, SourceRef
 from modmesh.storage.metadata import MetadataStore
 from modmesh.storage.rules import load_rules
@@ -187,6 +192,7 @@ def save_update(settings: ClientSettings, plan: WorkspaceUpdate, approval: str) 
         MetadataStore(settings.paths.database) as database,
         database.transaction(write=True) as transaction,
     ):
+        require_workspace_editable(transaction, plan.before.pack_id)
         current = Workspace.read(transaction.get("workspaces.items", plan.before.pack_id))
         if current.digest != plan.before.digest or plan.proposed.revision != current.revision + 1:
             raise ModMeshError(ErrorCode.CONFLICT, "Workspace changed after update preview")
