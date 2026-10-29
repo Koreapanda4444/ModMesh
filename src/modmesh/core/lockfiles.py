@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from modmesh.core.conflicts import analyze_dependencies, dependency_matches
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
+from modmesh.core.game_identity import GameIdentity, capture_game_identity
 from modmesh.core.games import GameAdapter
 from modmesh.core.packs import MAX_MANIFEST_BYTES, PackContext, PackEntry, _pairs
 from modmesh.core.resolver import DependencyEdge, DependencyResolution
@@ -24,9 +25,10 @@ class PackLock:
     rule_sha256: str
     entries: tuple[PackEntry, ...]
     warnings: tuple[str, ...]
+    game_identity: GameIdentity | None = None
 
     def document(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "schema_version": 2,
             "kind": "modmesh-lock",
             "workspace": self.workspace.document(),
@@ -35,6 +37,9 @@ class PackLock:
             "entries": [entry.document() for entry in self.entries],
             "warnings": self.warnings,
         }
+        if self.game_identity is not None:
+            result["game_identity"] = self.game_identity.document()
+        return result
 
     @property
     def digest(self) -> str:
@@ -52,7 +57,7 @@ class PackLock:
     def read(cls, value: object) -> PackLock:
         data = object_record(value)
         if (
-            set(data)
+            set(data) - {"game_identity"}
             != {"schema_version", "kind", "workspace", "context", "rule", "entries", "warnings"}
             or integer_record(data["schema_version"]) != 2
             or data["kind"] != "modmesh-lock"
@@ -83,8 +88,19 @@ class PackLock:
             len(item) > 1000 or any(not char.isprintable() for char in item) for item in warnings
         ):
             raise ModMeshError(ErrorCode.VALIDATION, "Invalid lockfile warnings")
+        game_identity = (
+            GameIdentity.read(data["game_identity"]) if "game_identity" in data else None
+        )
+        if game_identity is not None and game_identity.context != context:
+            raise ModMeshError(ErrorCode.CONFLICT, "Game identity and lock context differ")
         return cls(
-            workspace, context, integer_record(rule["revision"]), rule_hash, entries, warnings
+            workspace,
+            context,
+            integer_record(rule["revision"]),
+            rule_hash,
+            entries,
+            warnings,
+            game_identity,
         )
 
     @classmethod
@@ -153,6 +169,7 @@ def build_lock(
         rule.rule.digest,
         tuple(entries),
         (),
+        capture_game_identity(installation, rule.rule),
     )
     conflicts = analyze_dependencies(lock.resolution())
     if conflicts.blocked:
@@ -170,5 +187,6 @@ def build_lock(
             lock.rule_sha256,
             lock.entries,
             tuple(sorted(set(warnings))),
+            lock.game_identity,
         ).dumps()
     )

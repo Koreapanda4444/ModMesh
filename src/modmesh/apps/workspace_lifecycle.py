@@ -1,4 +1,5 @@
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 
 from modmesh.apps.runtime import create_game_registry
@@ -43,6 +44,16 @@ def freeze_workspace(
         else builtin_registry()
     )
     lock = build_lock(workspace, current, adapter, rules.get(workspace.game_id))
+    if lock.game_identity is not None:
+        with MetadataStore(settings.paths.database) as database:
+            database.put(
+                "game.identities",
+                lock.game_identity.digest,
+                {
+                    "identity": lock.game_identity.document(),
+                    "observed_at": datetime.now(UTC).isoformat(),
+                },
+            )
     for entry in lock.entries:
         if entry.mod.project.reference.source_id == "local":
             local_artifact(settings, entry.mod.file)

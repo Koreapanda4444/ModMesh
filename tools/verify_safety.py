@@ -1600,6 +1600,9 @@ async def check_workspace_import(root: Path) -> None:
         binary.write_bytes(b"game fixture; never launched")
     installation = create_game_registry(settings).get("palworld").inspect(game, Platform.WINDOWS)
     lock = freeze_workspace(settings, imported.pack_id, installation, imported.digest)
+    assert lock.game_identity is not None and len(lock.game_identity.files) == 2
+    assert lock.game_identity.version_source == "unknown"
+    assert all(item.role == "executable" for item in lock.game_identity.files)
     assert (
         lock.digest
         == freeze_workspace(settings, imported.pack_id, installation, imported.digest).digest
