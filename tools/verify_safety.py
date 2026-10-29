@@ -56,6 +56,7 @@ from modmesh.apps.workspace_lifecycle import freeze_workspace
 from modmesh.core.alternatives import find_alternatives
 from modmesh.core.artifact_matching import ArtifactCandidate
 from modmesh.core.cache import ArtifactCache
+from modmesh.core.compatibility import CompatibilityState, inspect_compatibility
 from modmesh.core.config import AppPaths, ClientSettings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.downloads import DownloadManager, DownloadPolicy, DownloadResult, DownloadState
@@ -1605,6 +1606,12 @@ async def check_workspace_import(root: Path) -> None:
     assert lock.game_identity.version_source == "unknown"
     assert all(item.role == "executable" for item in lock.game_identity.files)
     assert lock.provenance is not None and len(lock.provenance) == 1
+    report = inspect_compatibility(lock)
+    assert report.state == CompatibilityState.UNKNOWN and report.checked_at
+    assert any(
+        item.scope == "game_runtime" and item.state == CompatibilityState.UNKNOWN
+        for item in report.evidence
+    )
     with MetadataStore(settings.paths.database) as database:
         evidence = verified_provenance(database, lock.provenance[0])
         assert evidence is not None and evidence["redistribution"] == "not_recorded"

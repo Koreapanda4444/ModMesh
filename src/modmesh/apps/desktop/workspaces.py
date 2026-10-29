@@ -32,6 +32,7 @@ from modmesh.apps.workspace_activation import (
 from modmesh.apps.workspace_artifacts import import_local
 from modmesh.apps.workspace_legacy import adopt_profile
 from modmesh.apps.workspace_lifecycle import freeze_workspace
+from modmesh.core.compatibility import inspect_compatibility
 from modmesh.core.config import ClientSettings
 from modmesh.core.games import GameCapability, GameRegistry
 from modmesh.core.packs import PackEntry
@@ -63,6 +64,10 @@ class WorkspaceDialog(QDialog):
         notes.setPlainText(
             "\n".join(
                 [
+                    "호환성 근거: "
+                    + inspect_compatibility(
+                        prepared.lock, prepared.plan.issues if prepared.plan else ()
+                    ).state.value,
                     *((item.message for item in prepared.plan.issues) if prepared.plan else ()),
                     *prepared.lock.warnings,
                     *(prepared.plan.warnings if prepared.plan else ()),

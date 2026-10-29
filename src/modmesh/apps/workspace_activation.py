@@ -13,6 +13,7 @@ from modmesh.apps.workspace_artifacts import artifact_vault
 from modmesh.apps.workspace_legacy import activation_target, profile_configuration_digest
 from modmesh.apps.workspace_lifecycle import freeze_workspace
 from modmesh.core.cache import ArtifactCache, _Lease
+from modmesh.core.compatibility import inspect_compatibility
 from modmesh.core.config import ClientSettings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.downloads import _blocking
@@ -68,6 +69,9 @@ class WorkspaceActivation:
             "game_path": str(self.manager.root),
             "applicable": self.applicable,
             "already_active": self.plan is None,
+            "compatibility": inspect_compatibility(
+                self.lock, self.plan.issues if self.plan else ()
+            ).document(),
             "changes": [
                 {"action": item.action, "path": item.path, "size": item.size}
                 for item in self.plan.changes

@@ -17,6 +17,7 @@ from modmesh.apps.workspace_activation import (
 from modmesh.apps.workspace_artifacts import import_local
 from modmesh.apps.workspace_legacy import adopt_profile, import_manifest_workspace
 from modmesh.apps.workspace_lifecycle import freeze_workspace, write_lock
+from modmesh.core.compatibility import inspect_compatibility
 from modmesh.core.config import ClientSettings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.discovery import current_platform
@@ -58,6 +59,7 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
             "apply",
             "active",
             "recover",
+            "compatibility",
         ),
     )
     parser.add_argument("--game")
@@ -128,7 +130,7 @@ def workspace_command(args: argparse.Namespace, settings: ClientSettings) -> int
             adopted = adopt_profile(settings, installation, args.profile, name=args.name)
         print(json.dumps({**adopted.document(), "digest": adopted.digest}, ensure_ascii=False))
         return 0
-    if args.action in {"lock", "snapshot"}:
+    if args.action in {"lock", "snapshot", "compatibility"}:
         if not args.pack_id or not args.expected or args.path is None:
             raise ModMeshError(
                 ErrorCode.VALIDATION, "Lock preview needs --id, --path and --expected"
@@ -139,6 +141,12 @@ def workspace_command(args: argparse.Namespace, settings: ClientSettings) -> int
             workspace.game_id, args.path, DiscoveryContext(current_platform())
         )
         lock = freeze_workspace(settings, args.pack_id, installation, args.expected)
+        if args.action == "compatibility":
+            report = inspect_compatibility(lock)
+            with MetadataStore(settings.paths.database) as database:
+                database.put("workspaces.compatibility", lock.digest, report.document())
+            print(json.dumps(report.document(), ensure_ascii=False))
+            return int(report.state == "conflict")
         if args.action == "snapshot":
             with MetadataStore(settings.paths.database) as database:
                 WorkspaceHistory(database).capture(lock)
