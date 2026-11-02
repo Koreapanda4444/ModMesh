@@ -16,6 +16,7 @@ from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import httpx
 
@@ -35,8 +36,10 @@ from modmesh.adapters.games.minecraft import MinecraftAdapter
 from modmesh.adapters.games.minecraft_mods import matches_native, read_jar, validate_native
 from modmesh.adapters.games.palworld import PalworldAdapter
 from modmesh.adapters.games.rule_based import RuleGameAdapter
+from modmesh.adapters.launch import NativeLaunchBoundary
 from modmesh.adapters.sources.custom import CustomSource
 from modmesh.adapters.sources.workshop import WorkshopSource
+from modmesh.apps.launch_planning import prepare_launch
 from modmesh.apps.library import GameLibrary
 from modmesh.apps.operations import prepare_pack, prepare_pack_update, prepare_resolution
 from modmesh.apps.rules import RuleRegistrationService
@@ -74,7 +77,7 @@ from modmesh.core.lockfiles import PackLock, build_lock
 from modmesh.core.pack_io import export_profile, read_manifest, resolve_pack, write_manifest
 from modmesh.core.pack_versions import diff_manifests, save_version, versions
 from modmesh.core.packs import PackContext, PackEntry, PackManifest, PackSetting
-from modmesh.core.planning import InstallationPlanner, InstallInput
+from modmesh.core.planning import InstallationPlanner, InstallInput, snapshot
 from modmesh.core.priorities import SourcePriorities
 from modmesh.core.processes import java_guard
 from modmesh.core.profiles import Profile, ProfileManager, profile_record
@@ -1990,6 +1993,16 @@ async def check_workspace_import(root: Path) -> None:
     )
     assert not (game / "Pal/Content/Paks/~mods/user.pak").exists()
     assert prepared.document()["changes"]
+    launch = prepare_launch(settings, installation)
+    assert launch.method == LaunchMethod.STEAM and launch.uri == "steam://run/1623730"
+    with (
+        patch("modmesh.adapters.launch.current_platform", return_value=Platform.WINDOWS),
+        patch("modmesh.adapters.launch.os.startfile", create=True) as opened,
+    ):
+        called = NativeLaunchBoundary().invoke(launch)
+        assert called.state == LaunchCallState.ACCEPTED
+        assert called.document()["game_process_observed"] is False
+        opened.assert_called_once_with("steam://run/1623730", "open")
     executable = game / "Palworld.exe"
     original = executable.read_bytes()
     executable.write_bytes(b"updated executable with same unknown game version")
@@ -2588,6 +2601,41 @@ def check_launch_contracts(root: Path) -> None:
             pass
         else:
             raise AssertionError("Arbitrary URI accepted as a Steam launch")
+    executable = root / "Game.exe"
+    executable.write_bytes(b"game fixture; never execute")
+    identity = root.stat()
+    direct = replace(
+        plan,
+        method=LaunchMethod.EXECUTABLE,
+        root_device=identity.st_dev,
+        root_inode=identity.st_ino,
+        executable=executable,
+        executable_proof=snapshot(executable),
+        arguments=("-windowed",),
+    )
+    with (
+        patch("modmesh.adapters.launch.current_platform", return_value=Platform.WINDOWS),
+        patch("modmesh.adapters.launch.subprocess.Popen") as spawn,
+        patch("modmesh.adapters.launch.psutil.Process") as process,
+    ):
+        spawn.return_value.pid = 12345
+        spawn.return_value.poll.return_value = None
+        process.return_value.create_time.return_value = 100.0
+        result = NativeLaunchBoundary().invoke(direct)
+        assert (
+            result.state == LaunchCallState.ACCEPTED
+            and not result.document()["game_process_observed"]
+        )
+        assert spawn.call_args.args[0] == [str(executable), "-windowed"]
+        assert spawn.call_args.kwargs["shell"] is False
+        executable.write_bytes(b"changed after approval")
+        try:
+            NativeLaunchBoundary().invoke(direct)
+        except ModMeshError:
+            pass
+        else:
+            raise AssertionError("Changed executable was launched")
+        assert spawn.call_count == 1
 
 
 async def main() -> None:

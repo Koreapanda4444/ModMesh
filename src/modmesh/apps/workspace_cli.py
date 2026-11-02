@@ -6,6 +6,7 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 
+from modmesh.apps.launch_planning import prepare_launch
 from modmesh.apps.library import GameLibrary
 from modmesh.apps.runtime import create_game_registry
 from modmesh.apps.workspace_activation import (
@@ -76,6 +77,7 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
             "branch-info",
             "restore-plan",
             "restore",
+            "launch-plan",
         ),
     )
     parser.add_argument("--game")
@@ -99,6 +101,17 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
 
 
 def workspace_command(args: argparse.Namespace, settings: ClientSettings) -> int:
+    if args.action == "launch-plan":
+        if not args.game or args.path is None:
+            raise ModMeshError(ErrorCode.VALIDATION, "Launch preview needs --game and --path")
+        installation = GameLibrary(create_game_registry(settings), settings.paths.database).inspect(
+            args.game, args.path, DiscoveryContext(current_platform())
+        )
+        launch = prepare_launch(settings, installation)
+        print(
+            json.dumps({**launch.document(), "fingerprint": launch.fingerprint}, ensure_ascii=False)
+        )
+        return 0
     if args.action in {"restore-plan", "restore"}:
         if not args.pack_id or args.path is None or not args.expected or not args.snapshot:
             raise ModMeshError(
