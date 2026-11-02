@@ -120,22 +120,26 @@ def release_launch(
             guard = read_launch_receipt(guard)
             _release_ready(manager, guard)
             save_launch_receipt(store, guard)
+            audit: dict[str, object] = {
+                "attempt_id": guard["attempt_id"],
+                "target": plan.target,
+                "released_at": datetime.now(UTC).isoformat(),
+                "queues_cleared": True,
+                "previous_state": guard["state"],
+                "automatic_retry": False,
+                "guard_digest": document_digest(guard),
+            }
             with MetadataStore(settings.paths.database) as database:
                 for _, record in store.list("launch.attempts"):
                     save_launch_receipt(database, read_launch_receipt(record))
-                database.put(
-                    "launch.releases",
-                    str(guard["attempt_id"]),
-                    {
-                        "attempt_id": guard["attempt_id"],
-                        "target": plan.target,
-                        "released_at": datetime.now(UTC).isoformat(),
-                        "queues_cleared": True,
-                        "previous_state": guard["state"],
-                        "automatic_retry": False,
-                    },
+                database.put("launch.releases", str(guard["attempt_id"]), audit)
+            with store.transaction(write=True) as transaction:
+                transaction.put("launch.releases", str(guard["attempt_id"]), audit)
+                transaction.put(
+                    "launch.guard",
+                    "active",
+                    {**guard, "state": "released", "outcome_state": guard["state"]},
                 )
-            store.put("launch.guard", "active", {**guard, "state": "released"})
     return {
         "state": "released",
         "attempt_id": guard["attempt_id"],

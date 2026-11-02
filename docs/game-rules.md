@@ -19,7 +19,7 @@ modmesh-cli games --game my-game
 
 수동 DB 백업은 `modmesh-cli metadata backup --output backup.sqlite3`, 복원은 `modmesh-cli metadata restore --input backup.sqlite3 --output restored.sqlite3`입니다. 기존 DB를 덮지 않으므로 복원 결과를 확인한 뒤 별도로 설정을 변경합니다. DB 백업은 게임별 `.modmesh-state-v1`의 파일·프로필 blob이나 캐시를 포함하지 않습니다. 해당 게임 폴더와 자료도 함께 보존해야 합니다.
 
-실행 정의는 현재 검증·저장만 합니다. 로더 설치·자동 게임 실행은 제공하지 않습니다. BepInEx는 알려진 로더 DLL의 존재와 직접 추가한 DLL의 기본 PE 헤더만 검사하며 API/게임 호환성은 미검증입니다. UE4SS는 선택한 모드 루트 안의 `Scripts/main.lua` 또는 `dlls/main.dll`과 `enabled.txt` 배치를 검사합니다. 모드 코드를 ModMesh가 실행하지 않습니다. Minecraft의 인스턴스/Java 프로세스/JAR 호환성 검사는 내장 브리지만 사용합니다.
+승인된 실행 정의는 Play 검토에서 사용할 수 있습니다. 검증한 실행 파일 또는 선택 경로와 AppID가 유일하게 확인된 Steam 설치에만 실행을 요청하고, 확인되지 않은 런처는 수동 인계합니다. 로더 자동 설치와 실제 모드 로딩 성공 판정은 제공하지 않습니다. BepInEx는 알려진 로더 DLL의 존재와 직접 추가한 DLL의 기본 PE 헤더만 검사하며 API/게임 호환성은 미검증입니다. UE4SS는 선택한 모드 루트 안의 `Scripts/main.lua` 또는 `dlls/main.dll`과 `enabled.txt` 배치를 검사합니다. 모드 코드를 ModMesh가 실행하지 않습니다. Minecraft의 인스턴스/Java 프로세스/JAR 호환성 검사는 내장 브리지만 사용합니다.
 
 ## 형식
 
@@ -37,9 +37,9 @@ modmesh-cli games --game my-game
 | `install_strategies` | `strategy_id`, `kind`, `root_id`, 명시적 `extensions`, `mappings` |
 | `mod_types` | 지원 파일 종류의 소문자 식별자 목록 |
 | `profile_scope` | `none` 또는 `managed-files`. 세이브·사용자 파일을 자동 수집하지 않음 |
-| `launch` | `strategy`: `manual`/`steam`/`executable`, `executable`, `app_id`, `arguments`. 실행 호출은 별도 단계에서 제공 |
+| `launch` | `strategy`: `manual`/`steam`/`executable`, `executable`, `app_id`, `arguments`. Play의 별도 승인·활성 파일 검증 후 OS에 인계 |
 | `capabilities` | 실제 구현된 discovery/version/mod_discovery/install_rules/removal_rules/profiles/workshop_handoff의 부분집합 |
 
 파일 배치 종류는 `file`(단일 파일), `archive`(제한된 ZIP), `mapped`(ZIP prefix 매핑), `plugin`(로더가 필요한 파일/ZIP), `readonly`(파일 변경 없음)입니다. prefix 매핑은 `source_prefix`, `target_prefix` 쌍이며 대상은 항상 선택한 모드 루트 안입니다. 실제 설치는 기존 변경 계획·fingerprint 승인·파일 소유권·해시·복구 엔진을 사용합니다.
 
-루트 밖 경로·경로 변수·와일드카드·스크립트 훅·임의 URL·실행 인터프리터·Shell 인수·세이브/Steam 소유 영역을 허용하지 않습니다. 로더를 설치하거나 바이너리를 패치하지 않습니다. 실행 정의를 등록해도 실행 기능이 지원됐다는 뜻은 아닙니다. 로더 파일 탐지는 게임 내부 호환성 증거와 구분합니다.
+루트 밖 경로·경로 변수·와일드카드·스크립트 훅·임의 URL·실행 인터프리터·Shell 인수·세이브/Steam 소유 영역을 허용하지 않습니다. 로더를 설치하거나 바이너리를 패치하지 않습니다. 실행 정의 등록만으로 게임 실행이나 모드 로딩 성공을 뜻하지 않습니다. 실행 경로·파일 증명·활성 프로필·프로세스 잠금을 Play에서 다시 검사합니다. 로더 파일 탐지는 게임 내부 호환성 증거와 구분합니다.

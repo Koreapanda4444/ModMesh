@@ -45,7 +45,9 @@ jobs:
       - name: Exercise server health endpoint
         run: modmesh-server --check
       - name: Verify file safety, version drift and transactional rollback
-        run: python tools/verify_safety.py
+        run: python tools/verify_safety.py --without-launch
+      - name: Verify Play and recovery using mocked OS launch boundaries
+        run: python tools/verify_safety.py --launch-only
       - name: Verify server migrations
         run: python tools/verify_server.py
       - name: Verify account UI and session isolation

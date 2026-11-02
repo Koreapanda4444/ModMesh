@@ -1,13 +1,17 @@
-from dataclasses import replace
+import os
+from dataclasses import asdict, replace
 
+from modmesh.adapters.games.steam import steam_installations
 from modmesh.apps.prism_launch import bound_prism
 from modmesh.apps.runtime import create_game_registry
 from modmesh.apps.workspace_legacy import activation_target
 from modmesh.core.config import ClientSettings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.game_rules import LaunchKind
+from modmesh.core.games import DiscoveryContext
 from modmesh.core.launching import LaunchMethod, LaunchPlan
 from modmesh.core.planning import snapshot, target_path
+from modmesh.core.workspaces import document_digest
 from modmesh.domain.models import GameInstallation
 from modmesh.storage.rules import load_rules
 
@@ -43,10 +47,26 @@ def prepare_launch(
     )
     definition = registered.rule.launch
     if definition.strategy == LaunchKind.STEAM:
+        matches = steam_installations(
+            DiscoveryContext(current.platform, environment=os.environ), str(definition.app_id)
+        )
+        if (
+            len(matches) != 1
+            or matches[0].path != current.path
+            or matches[0].state_flags != "4"
+            or matches[0].build_id is None
+        ):
+            return replace(
+                common,
+                instruction="Steam could not uniquely verify this installed library and AppID. "
+                "Open this exact installation in Steam manually after applying the pack.",
+            )
+        proof = snapshot(matches[0].manifest)
         return replace(
             common,
             method=LaunchMethod.STEAM,
             uri="steam://run/" + str(definition.app_id),
+            binding_digest=document_digest(asdict(proof)),
             instruction="Hand off to the installed Steam client; "
             "use its normal account and ownership checks",
         )

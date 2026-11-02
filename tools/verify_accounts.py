@@ -10,6 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+from uuid import uuid4
 
 import httpx
 from PySide6.QtWidgets import QApplication
@@ -30,7 +31,9 @@ from modmesh.apps.server.main import create_app
 from modmesh.core.config import AppPaths, ClientSettings, ServerSettings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError, redact_text
 from modmesh.core.games import DiscoveryContext, GameRegistry
+from modmesh.core.launch_receipts import save_launch_receipt
 from modmesh.core.packs import PackContext, PackManifest
+from modmesh.core.profiles import ProfileManager
 from modmesh.domain.models import GameInstallation, Platform
 from modmesh.remote.accounts import AccountClient
 from modmesh.remote.sync import RemotePacks
@@ -389,8 +392,32 @@ def verify():
             assert "미검증" in workspace_panel.status.text()
             workspace_panel.inspect_launch()
             wait()
-            assert '"journal_consistent": true' in workspace_panel.status.text()
-            assert '"game_process_observed": false' in workspace_panel.status.text()
+            assert "기록 일치: 정상" in workspace_panel.status.text()
+            assert "게임 프로세스: 관측되지 않음" in workspace_panel.status.text()
+            manager = ProfileManager(registry, installation)
+            with manager._locked() as launch_store:
+                assert launch_store is not None
+                previous = launch_store.get("launch.guard", "active")
+                accepted = {
+                    **previous,
+                    "attempt_id": str(uuid4()),
+                    "state": "accepted",
+                    "method": "steam",
+                    "detail": "Mocked handoff accepted",
+                }
+                launch_store.put("launch.guard", "active", accepted)
+                save_launch_receipt(launch_store, accepted)
+                save_launch_receipt(store, accepted)
+            workspace_panel.review_launch_release()
+            wait()
+            assert workspace_panel.dialog is not None, workspace_panel.status.text()
+            assert not workspace_panel.dialog.confirm.isEnabled()
+            workspace_panel.dialog.acknowledge.setChecked(True)
+            workspace_panel.dialog.accept()
+            wait()
+            assert "실행 잠금을 해제했습니다" in workspace_panel.status.text(), (
+                workspace_panel.status.text()
+            )
             workspace_panel.close()
             panel.server.setText("http://127.0.0.1")
             panel.select_server()

@@ -1,6 +1,7 @@
 import os
 import subprocess
 from contextlib import suppress
+from dataclasses import asdict
 
 import psutil
 
@@ -8,6 +9,8 @@ from modmesh.core.diagnostics import ErrorCode, ModMeshError, redact_text
 from modmesh.core.discovery import current_platform
 from modmesh.core.launching import LaunchCall, LaunchCallState, LaunchMethod, LaunchPlan
 from modmesh.core.planning import snapshot
+from modmesh.core.prism import prism_instance
+from modmesh.core.workspaces import document_digest
 from modmesh.domain.models import Platform
 
 
@@ -25,6 +28,18 @@ def verify_launch_files(plan: LaunchPlan) -> None:
             raise ModMeshError(ErrorCode.CONFLICT, "Launch executable changed after approval")
         if plan.method == LaunchMethod.EXECUTABLE and not plan.executable.is_relative_to(plan.root):
             raise ModMeshError(ErrorCode.CONFLICT, "Game executable escapes the approved game root")
+    if plan.method == LaunchMethod.PRISM:
+        arguments, digest = prism_instance(plan.root)
+        if arguments != plan.arguments or digest != plan.instance_digest:
+            raise ModMeshError(ErrorCode.CONFLICT, "Prism instance changed after approval")
+    if plan.method == LaunchMethod.STEAM and plan.binding_digest is not None:
+        assert plan.uri is not None
+        app_id = plan.uri.rsplit("/", 1)[1]
+        manifest = plan.root.parent.parent / f"appmanifest_{app_id}.acf"
+        if document_digest(asdict(snapshot(manifest))) != plan.binding_digest:
+            raise ModMeshError(
+                ErrorCode.CONFLICT, "Steam installation metadata changed after approval"
+            )
 
 
 class NativeLaunchBoundary:

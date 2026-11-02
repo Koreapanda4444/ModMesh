@@ -2640,6 +2640,7 @@ def check_launch_contracts(root: Path) -> None:
         assert spawn.call_count == 1
     game = root / "PrismLauncher/instances/selected/.minecraft"
     game.mkdir(parents=True)
+    (root / "PrismLauncher/prismlauncher.cfg").write_text("[General]\nInstanceDir=instances\n")
     (game.parent / "mmc-pack.json").write_text('{"formatVersion":1}')
     (game.parent / "instance.cfg").write_text("name=Selected instance")
     launcher = root / "PrismLauncher.exe"
@@ -2653,6 +2654,25 @@ def check_launch_contracts(root: Path) -> None:
     settings = ClientSettings(AppPaths(root / "cfg", root / "data", root / "cache"))
     bind_prism(settings, prism, prism.fingerprint)
     assert bound_prism(settings, minecraft).fingerprint == prism.fingerprint
+    with (
+        patch("modmesh.adapters.launch.current_platform", return_value=Platform.WINDOWS),
+        patch("modmesh.adapters.launch.subprocess.Popen") as spawn,
+        patch("modmesh.adapters.launch.psutil.Process") as process,
+    ):
+        spawn.return_value.pid = 12345
+        spawn.return_value.poll.return_value = None
+        process.return_value.create_time.return_value = 100.0
+        assert NativeLaunchBoundary().invoke(prism).state == LaunchCallState.ACCEPTED
+        assert spawn.call_args.args[0] == [str(launcher), *prism.arguments]
+        assert spawn.call_args.kwargs["shell"] is False
+        (game.parent / "instance.cfg").write_text("name=Changed configuration")
+        try:
+            NativeLaunchBoundary().invoke(prism)
+        except ModMeshError:
+            pass
+        else:
+            raise AssertionError("Prism instance drift reached the OS boundary")
+        assert spawn.call_count == 1
     (game.parent / "instance.cfg").write_text("name=Changed configuration")
     try:
         bound_prism(settings, minecraft)
@@ -2660,18 +2680,58 @@ def check_launch_contracts(root: Path) -> None:
         pass
     else:
         raise AssertionError("Changed Prism instance reused its previous approval")
+    (root / "PrismLauncher/prismlauncher.cfg").write_text("[General]\nInstanceDir=elsewhere\n")
+    try:
+        prism_plan(minecraft, launcher)
+    except ModMeshError:
+        pass
+    else:
+        raise AssertionError("Prism directory override could launch a different instance")
+    valid_steam = replace(steam, root_device=identity.st_dev, root_inode=identity.st_ino)
+    with (
+        patch("modmesh.adapters.launch.current_platform", return_value=Platform.WINDOWS),
+        patch("modmesh.adapters.launch.os.startfile", create=True) as startfile,
+    ):
+        assert NativeLaunchBoundary().invoke(valid_steam).state == LaunchCallState.ACCEPTED
+        startfile.assert_called_once_with("steam://run/1623730", "open")
+        startfile.side_effect = OSError("handler missing")
+        assert NativeLaunchBoundary().invoke(valid_steam).state == LaunchCallState.FAILED
+    with (
+        patch("modmesh.adapters.launch.current_platform", return_value=Platform.LINUX),
+        patch("modmesh.adapters.launch.subprocess.Popen") as spawn,
+    ):
+        linux = replace(valid_steam, platform=Platform.LINUX)
+        spawn.return_value.wait.return_value = 0
+        assert NativeLaunchBoundary().invoke(linux).state == LaunchCallState.ACCEPTED
+        assert spawn.call_args.args[0] == ["/usr/bin/xdg-open", "steam://run/1623730"]
+        spawn.return_value.wait.side_effect = subprocess.TimeoutExpired("mock handler", 5)
+        assert NativeLaunchBoundary().invoke(linux).state == LaunchCallState.UNCERTAIN
+        spawn.return_value.wait.side_effect = None
+        spawn.return_value.wait.return_value = 1
+        assert NativeLaunchBoundary().invoke(linux).state == LaunchCallState.UNCERTAIN
 
 
 async def check_launch_guards(root: Path) -> None:
     from modmesh.apps.guarded_launch import guarded_launch
     from modmesh.apps.launch_planning import prepare_launch
 
-    settings, installation, (workspace, _) = await workspace_setup(root)
+    settings, installation, (workspace, _) = await launch_workspace_setup(root)
     activation = await prepare_workspace(
         settings, workspace.pack_id, installation, workspace.digest
     )
     receipt = apply_workspace(settings, activation, activation.fingerprint)
     launch = prepare_launch(settings, installation)
+    assert launch.method == LaunchMethod.STEAM
+    from modmesh.apps.workspace_artifacts import artifact_vault
+
+    with artifact_vault(settings) as vault:
+        inputs = tuple(
+            InstallInput(entry.mod, vault.lookup(entry.mod.file).path, entry.rule_id, entry.prefix)
+            for entry in activation.lock.entries
+        )
+        old_install = activation.manager.plan(activation.lock.resolution(), inputs)
+    old_removal = activation.manager.plan_removal((workspace.entries[0].mod.project.reference,))
+    assert old_install.applicable and old_removal.applicable
     cancelled = threading.Event()
     cancelled.set()
     with patch("modmesh.apps.guarded_launch.NativeLaunchBoundary") as boundary:
@@ -2692,6 +2752,8 @@ async def check_launch_guards(root: Path) -> None:
             lambda: guarded_launch(settings, installation, launch, receipt, launch.fingerprint),
             lambda: activation.manager.plan_switch(receipt.profile_id),
             lambda: activation.manager.recover(),
+            lambda: activation.manager.apply(old_install, old_install.fingerprint),
+            lambda: activation.manager.remove(old_removal, old_removal.fingerprint),
         ):
             try:
                 operation()
@@ -2711,7 +2773,7 @@ async def check_workspace_play(root: Path) -> None:
     from modmesh.core.games import EnvironmentIssue, EnvironmentReport
     from modmesh.core.launch_receipts import save_launch_receipt
 
-    settings, installation, (workspace, _) = await workspace_setup(root)
+    settings, installation, (workspace, _) = await launch_workspace_setup(root)
     plan = await prepare_play(settings, workspace.pack_id, installation, workspace.digest)
     repeated = await prepare_play(settings, workspace.pack_id, installation, workspace.digest)
     assert repeated.fingerprint == plan.fingerprint
@@ -2758,7 +2820,7 @@ async def check_launch_recovery(root: Path) -> None:
     from modmesh.apps.workspace_play import apply_play, prepare_play
     from modmesh.core.games import EnvironmentIssue, EnvironmentReport
 
-    settings, installation, (workspace, _) = await workspace_setup(root)
+    settings, installation, (workspace, _) = await launch_workspace_setup(root)
     plan = await prepare_play(settings, workspace.pack_id, installation, workspace.digest)
     with patch("modmesh.apps.guarded_launch.NativeLaunchBoundary") as boundary:
         boundary.return_value.invoke.side_effect = RuntimeError("password=hidden")
@@ -2807,13 +2869,204 @@ async def check_launch_recovery(root: Path) -> None:
         assert active_workspace(settings, installation)["state"] == "active"
 
 
-async def main() -> None:
+async def check_play_cancellation(root: Path) -> None:
+    from modmesh.apps.launch_status import launch_status
+    from modmesh.apps.workspace_play import apply_play, prepare_play
+
+    settings, installation, (workspace, _) = await launch_workspace_setup(root)
+    plan = await prepare_play(settings, workspace.pack_id, installation, workspace.digest)
+    cancelled = threading.Event()
+    original = workspace_engine.apply_workspace
+
+    def cancel_after_commit(*args, **kwargs):
+        receipt = original(*args, **kwargs)
+        cancelled.set()
+        return receipt
+
+    with (
+        patch("modmesh.apps.workspace_play.apply_workspace", side_effect=cancel_after_commit),
+        patch("modmesh.apps.guarded_launch.NativeLaunchBoundary") as boundary,
+    ):
+        try:
+            apply_play(settings, plan, plan.fingerprint, cancelled=cancelled)
+        except ModMeshError as exc:
+            assert exc.code == ErrorCode.CANCELLED
+        else:
+            raise AssertionError("Cancellation before OS handoff was ignored")
+        assert not boundary.return_value.invoke.called
+    assert active_workspace(settings, installation)["state"] == "active"
+    assert not launch_status(settings, installation)["attempts"]
+    cancelled.clear()
+    retry = await prepare_play(settings, workspace.pack_id, installation, workspace.digest)
+    with patch("modmesh.apps.guarded_launch.NativeLaunchBoundary") as boundary:
+
+        def accepted(_plan):
+            cancelled.set()
+            return LaunchCall(LaunchCallState.ACCEPTED)
+
+        boundary.return_value.invoke.side_effect = accepted
+        result = apply_play(settings, retry, retry.fingerprint, cancelled=cancelled)
+        assert result["state"] == "accepted"
+        assert launch_status(settings, installation)["mutation_blocked"]
+        assert boundary.return_value.invoke.call_count == 1
+
+
+async def launch_crash(root: Path) -> None:
+    from modmesh.apps.workspace_play import apply_play, prepare_play
+
+    settings, installation, (workspace, _) = await launch_workspace_setup(root)
+    plan = await prepare_play(settings, workspace.pack_id, installation, workspace.digest)
+
+    class Boundary:
+        def invoke(self, _plan):
+            os._exit(77)
+
+    apply_play(settings, plan, plan.fingerprint, boundary=Boundary())
+
+
+def check_launch_crash(root: Path) -> None:
+    from modmesh.apps.launch_recovery import prepare_launch_release, release_launch
+    from modmesh.apps.launch_status import launch_status
+
+    child = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve()), "--launch-crash", str(root)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert child.returncode == 77, child.stderr
+    settings, installation = workspace_environment(root / "steamapps/common")
+    status = launch_status(settings, installation)
+    assert status["mutation_blocked"] and status["journal_consistent"]
+    assert status["attempts"][0]["state"] == "invoking"
+    assert not status["automatic_retry"]
+    assert (installation.path / "Pal/Content/Paks/~mods/A.pak").exists()
+    release = prepare_launch_release(settings, installation)
+    release_launch(settings, installation, release, release.fingerprint, queues_cleared=True)
+    assert active_workspace(settings, installation)["state"] == "active"
+    assert not launch_status(settings, installation)["mutation_blocked"]
+
+
+async def check_play_downloads(root: Path) -> None:
+    from modmesh.apps.workspace_play import acquire_play_artifacts, prepare_play
+
+    settings, installation, _ = await workspace_setup(root)
+    source = CustomSource(settings.paths.database)
+    payload = b"exact permitted remote package"
+    identity = source.register(
+        "palworld",
+        "Remote Play",
+        "https://files.example/play.pak",
+        filename="play.pak",
+        sha256=hashlib.sha256(payload).hexdigest(),
+        dependencies_known=True,
+    )
+    project = await source.project("palworld", identity)
+    version = (await source.versions("palworld", identity))[0]
+    entry = PackEntry(ResolvedMod(project, version, version.files[0], True), "palworld-pak", "")
+    with MetadataStore(settings.paths.database) as database:
+        store = WorkspaceStore(database)
+        workspace = store.create("palworld", "Remote Play")
+        workspace = store.save(replace(workspace, revision=2, entries=(entry,)), workspace.digest)
+    lock = freeze_workspace(settings, workspace.pack_id, installation, workspace.digest)
+    registry = SourceRegistry()
+    registry.register(source)
+    requests = []
+
+    def respond(request):
+        requests.append(str(request.url))
+        return httpx.Response(200, content=payload)
+
+    def downloads(*args, **kwargs):
+        return DownloadManager(
+            *args, **kwargs, resolver=public_addresses, transport=httpx.MockTransport(respond)
+        )
+
+    with patch("modmesh.apps.workspace_play.DownloadManager", side_effect=downloads):
+        plan = await prepare_play(settings, workspace.pack_id, installation, workspace.digest)
+        assert plan.activation.applicable and requests == ["https://files.example/play.pak"]
+        with patch.object(
+            source, "resolve_download", side_effect=AssertionError("Cache hit attempted network")
+        ):
+            await acquire_play_artifacts(settings, lock, registry, threading.Event())
+        assert len(requests) == 1
+        bad_identity = source.register(
+            "palworld",
+            "Invalid content",
+            "https://files.example/bad.pak",
+            filename="bad.pak",
+            sha256="0" * 64,
+            dependencies_known=True,
+        )
+        bad_project = await source.project("palworld", bad_identity)
+        bad_version = (await source.versions("palworld", bad_identity))[0]
+        bad_entry = PackEntry(
+            ResolvedMod(bad_project, bad_version, bad_version.files[0], True), "palworld-pak", ""
+        )
+        with patch.object(
+            source,
+            "resolve_download",
+            return_value=DownloadAccess(DownloadMode.DIRECT, "https://files.example/play.pak"),
+        ):
+            try:
+                await acquire_play_artifacts(
+                    settings, replace(lock, entries=(bad_entry,)), registry, threading.Event()
+                )
+            except ModMeshError as exc:
+                assert exc.code == ErrorCode.INTEGRITY
+            else:
+                raise AssertionError("Play cached a file with the wrong locked hash")
+        with patch.object(
+            source,
+            "resolve_download",
+            return_value=DownloadAccess(DownloadMode.EXTERNAL, "https://files.example/manual"),
+        ):
+            try:
+                await acquire_play_artifacts(
+                    settings, replace(lock, entries=(bad_entry,)), registry, threading.Event()
+                )
+            except ModMeshError as exc:
+                assert exc.code == ErrorCode.UNSUPPORTED
+            else:
+                raise AssertionError("Play bypassed source download restrictions")
+    assert not (installation.path / "Pal/Content/Paks/~mods/play.pak").exists()
+
+
+async def launch_workspace_setup(root: Path):
+    steamapps = root / "steamapps"
+    steamapps.mkdir(parents=True)
+    (steamapps / "appmanifest_1623730.acf").write_text(
+        '"AppState" { "appid" "1623730" "installdir" "Game" "buildid" "42" "StateFlags" "4" }'
+    )
+    os.environ["STEAM_PATH"] = str(root)
+    return await workspace_setup(steamapps / "common")
+
+
+async def check_launch_suite(root: Path) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    with patch.dict(os.environ):
+        check_launch_contracts(root / "contracts")
+        unregistered, copied, _ = await workspace_setup(root / "unregistered")
+        assert prepare_launch(unregistered, copied).method == LaunchMethod.MANUAL
+        await check_launch_guards(root / "guards")
+        await check_workspace_play(root / "play")
+        await check_launch_recovery(root / "recovery")
+        await check_play_cancellation(root / "cancellation")
+        await check_play_downloads(root / "downloads")
+        check_launch_crash(root / "crash")
+
+
+async def launch_main() -> None:
+    with TemporaryDirectory(prefix="modmesh-launch-") as name:
+        await check_launch_suite(Path(name))
+    print("Mocked OS handoff, Play, cancellation, crash and recovery safety passed")
+
+
+async def main(*, include_launch: bool = True) -> None:
     logging.disable(logging.CRITICAL)
     with TemporaryDirectory(prefix="modmesh-safety-") as name:
-        check_launch_contracts(Path(name) / "launch-contracts")
-        await check_launch_guards(Path(name) / "launch-guards")
-        await check_workspace_play(Path(name) / "workspace-play")
-        await check_launch_recovery(Path(name) / "launch-recovery")
+        if include_launch:
+            await check_launch_suite(Path(name) / "launch")
         check_workspace_metadata(Path(name) / "workspaces")
         check_workspace_legacy(Path(name) / "workspace-legacy")
         await check_workspace_import(Path(name) / "workspace-import")
@@ -2844,7 +3097,13 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 4 and sys.argv[1] == "--install-crash":
+    if sys.argv[1:] == ["--launch-only"]:
+        asyncio.run(launch_main())
+    elif sys.argv[1:] == ["--without-launch"]:
+        asyncio.run(main(include_launch=False))
+    elif len(sys.argv) == 3 and sys.argv[1] == "--launch-crash":
+        asyncio.run(launch_crash(Path(sys.argv[2])))
+    elif len(sys.argv) == 4 and sys.argv[1] == "--install-crash":
         install_crash(Path(sys.argv[2]), sys.argv[3])
     elif len(sys.argv) == 4 and sys.argv[1] == "--removal-crash":
         removal_crash(Path(sys.argv[2]), sys.argv[3])

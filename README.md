@@ -55,7 +55,7 @@ py -3.12 -m venv .venv
 | Nexus Mods | 공개 인기 목록과 공식 사이트 인계. 전체 카탈로그 검색에는 제한이 있으며, 인증 상세·다운로드 API는 미검증. |
 | CurseForge | 승인 API 키와 배포 권한을 사용하는 Minecraft Java 모드 연동. 승인 계정 API·실다운로드는 미검증. |
 
-Minecraft는 확인된 단일 로더와 게임 버전이 있는 클라이언트 인스턴스의 JAR만 `mods`에 설치합니다. 로더 설치·런처 실행·설정/세이브 수정은 수행하지 않습니다. Fabric의 확장 SemVer·시험판·와일드카드와 숫자형 Maven 범위를 검사하며 해석할 수 없는 필수 조건은 차단합니다. 여러 JAR에 포함된 Fabric 공용 모드는 내장 JAR의 SHA-256과 메타데이터까지 같을 때 한 번 검증합니다. 서로 다른 내장 후보의 로더 선택은 미검증으로 차단합니다. 선택한 런처의 Java 런타임과 일부 NeoForge FML 언어 로더 범위는 경고로 미검증 표시합니다. 실제 Modrinth 다운로드 검증은 실행 환경의 OS DNS 제한으로 공개 DoH 응답을 주입해 수행했으며, 제품 기본 경로는 OS DNS입니다.
+Minecraft는 확인된 단일 로더와 게임 버전이 있는 클라이언트 인스턴스의 JAR만 `mods`에 설치합니다. 로더 자동 설치와 세이브 수정은 수행하지 않습니다. 승인한 Prism 실행 연결과 명시적으로 선택한 프로필 설정만 사용합니다. Fabric의 확장 SemVer·시험판·와일드카드와 숫자형 Maven 범위를 검사하며 해석할 수 없는 필수 조건은 차단합니다. 여러 JAR에 포함된 Fabric 공용 모드는 내장 JAR의 SHA-256과 메타데이터까지 같을 때 한 번 검증합니다. 서로 다른 내장 후보의 로더 선택은 미검증으로 차단합니다. 선택한 런처의 Java 런타임과 일부 NeoForge FML 언어 로더 범위는 경고로 미검증 표시합니다. 실제 Modrinth 다운로드 검증은 실행 환경의 OS DNS 제한으로 공개 DoH 응답을 주입해 수행했으며, 제품 기본 경로는 OS DNS입니다.
 
 Minecraft 다중 출처는 선택 인스턴스의 게임 버전·로더로 조회하고 설치 계획에서 다시 검증합니다. 상세 화면에서 정확한 프로젝트 ID로 출처 연결을 검토·해제할 수 있습니다. 연결만으로 파일을 같은 것으로 취급하지 않으며, 확인된 호환 맥락과 SHA-256/SHA-512 일치가 있을 때만 허용된 출처로 대체 다운로드합니다. API 키·배포 권한이 없거나 약한 해시만 제공되면 해당 대체 후보를 사용할 수 없다고 표시합니다.
 
@@ -69,7 +69,7 @@ Minecraft 다중 출처는 선택 인스턴스의 게임 버전·로더로 조�
 
 내장 게임 외에 선언형 JSON 규칙으로 게임을 추가할 수 있습니다. 데스크톱의 **게임 규칙**에서 게임·모드 폴더·로더·실행 정의를 입력해 JSON을 만들거나 불러오고, 변경 없이 검사한 뒤 명시적으로 승인합니다. CLI는 `modmesh-cli rules check --file game.json`이 반환한 해시를 `rules register --file game.json --approve SHA256`에 전달합니다. 경로를 함께 등록하려면 두 명령에 `--path <게임 폴더>`를 지정합니다. 개정 업데이트는 더 큰 revision과 `--previous PREVIOUS_SHA256`이 필요합니다. `rules list`와 `games`에서 출처·승인 상태와 기능별 지원을 확인합니다. [규칙 계약과 사용법](docs/game-rules.md)을 참고하세요.
 
-규칙 기반 파일/ZIP/경로 매핑과 BepInEx·UE4SS 배치는 기존 승인·파일 보호·제거·프로필 엔진을 사용합니다. 로더는 별도 설치가 필요합니다. 내장 게임 덮어쓰기와 위험 경로·명령을 거부하며, 잘못 저장된 규칙은 원본을 보존하고 탐색 진단에 표시합니다. **실행 정의는 현재 저장·검증만 하며 게임 실행 기능은 아직 제공하지 않습니다.** 동기화·Play 통합은 이후 단계입니다.
+규칙 기반 파일/ZIP/경로 매핑과 BepInEx·UE4SS 배치는 기존 승인·파일 보호·제거·프로필 엔진을 사용합니다. 로더는 별도 설치가 필요합니다. 내장 게임 덮어쓰기와 위험 경로·명령을 거부하며, 잘못 저장된 규칙은 원본을 보존하고 탐색 진단에 표시합니다. 승인된 규칙의 실행 파일 또는 확인된 Steam AppID로 기존 런처에 실행을 요청할 수 있습니다. 파일 변경과 OS 호출은 별도 단계로 검증하며 실제 게임·모드 로딩 여부는 미검증으로 유지합니다.
 
 **팩 작업공간**에서 독립 팩을 만들고 ZIP/JAR/DLL/Pak 파일을 추가해 사용 여부·버전 고정 정책·설치 규칙을 편집합니다. 파일 추가는 검증한 사본을 보존하며 원본과 게임 폴더를 변경하지 않습니다. **팩 적용 계획**에서 변경과 경고를 확인하고 승인하면 기존 프로필 트랜잭션 엔진으로 전환합니다. 팩마다 정확한 활성 잠금 파일과 적용 기록을 남기며, 파일 변경 중단은 원래 구성으로 복구하고 파일 전환 후 기록 저장만 중단됐다면 실제 활성 파일을 확인해 기록을 완성합니다. 사용자 수정 파일은 보존하고 확인할 수 없으면 `recovery_required`로 남깁니다. 데스크톱의 **중단된 팩 복구** 또는 아래 CLI로 재시도합니다. 기존 Profile/Manifest schema 1 데이터는 원본을 유지하며 가져올 수 있습니다.
 
@@ -83,7 +83,24 @@ modmesh-cli workspace active --game palworld --path "D:/Games/Palworld"
 modmesh-cli workspace recover --game palworld --path "D:/Games/Palworld"
 ```
 
-각 편집 결과의 최신 `digest`를 다음 `--expected`에 사용합니다. `plan`은 게임 파일을 변경하지 않고 비활성 프로필 사본을 준비하며, `apply`는 같은 계획을 다시 검증합니다. `active`는 실제 프로필·파일과 기록이 모두 맞을 때만 `active`를 반환합니다. 활성 팩이나 복구 대기 팩은 삭제할 수 없습니다. `workspace lock`, `snapshot`, `history`, `snapshot-show`로 정확한 버전과 불변 이력을 조회합니다. 로컬 사본 또는 검증 캐시·보존된 프로필에 정확한 파일이 있어야 적용할 수 있으며 원격 파일 자동 확보는 아직 연결하지 않았습니다. 외부 모드는 공유되고 세이브는 보존되며, 의존성·호환성 미확인과 실제 게임 로딩 미검증은 계속 표시합니다.
+각 편집 결과의 최신 `digest`를 다음 `--expected`에 사용합니다. `plan`은 게임 파일을 변경하지 않고 비활성 프로필 사본을 준비하며, `apply`는 같은 계획을 다시 검증합니다. `active`는 실제 프로필·파일과 기록이 모두 맞을 때만 `active`를 반환합니다. 활성 팩이나 복구 대기 팩은 삭제할 수 없습니다. `workspace lock`, `snapshot`, `history`, `snapshot-show`로 정확한 버전과 불변 이력을 조회합니다. 일반 팩 적용 계획은 로컬 사본·검증 캐시·보존된 프로필을 사용합니다. Play는 잠금 버전의 정확한 파일을 기존 출처의 허용된 다운로드 경로로 확보하고 검증한 뒤 적용 계획을 준비합니다. 수동 다운로드가 필요한 출처는 권한을 우회하지 않습니다. 외부 모드는 공유되고 세이브는 보존되며, 의존성·호환성 미확인과 실제 게임 로딩 미검증은 계속 표시합니다.
+
+**Play · 준비하고 실행**은 정확한 파일 확보 → 변경 계획 승인 → 팩 전환 → 활성 파일 검증 → 기존 런처 호출 순서로 동작합니다. 설치 기록에서 선택 경로와 AppID가 유일하게 확인된 Steam 라이브러리만 자동 인계합니다. 승인한 게임 실행 파일은 고정 인자 목록으로 호출하고 셸을 사용하지 않습니다. Minecraft는 **Prism 연결…**에서 사용자가 선택한 실행 파일과 기존 인스턴스를 승인해야 자동 실행합니다. [Prism 공식 CLI](https://prismlauncher.org/wiki/getting-started/command-line-interface/)의 `--dir`와 `--launch`를 사용하며, 초기화된 `prismlauncher.cfg`와 기본 `instances/<ID>/minecraft` 또는 `.minecraft` 구조만 지원합니다. 별도 인스턴스 디렉터리·다중 디렉터리·확인되지 않은 런처는 수동 실행 대상으로 안내합니다. 실행 파일·런처 설정·인스턴스 메타데이터가 바뀌면 다시 검토해야 합니다. 실행 파일의 해시는 선택한 파일을 고정하며 제작사 서명을 보증하지 않습니다. 기존 런처의 정상 계정·소유권 확인을 사용합니다.
+
+OS 호출이 수락돼도 게임 프로세스나 모드 로딩 성공으로 기록하지 않습니다. **실행 상태와 적용 팩 확인**에서 호출 결과와 현재 게임 프로세스 관측을 분리해 확인합니다. 실행 중이거나 호출 결과가 불확실하면 중복 실행·프로필 전환·설치·제거·파일 복구를 차단합니다. 호출 실패 뒤에도 적용된 팩과 이전 스냅샷을 보존합니다. OS 호출 직전 취소는 실행을 막고, 호출 이후 취소는 게임을 강제로 종료하지 않습니다. 앱 중단 시 결과를 임의로 실패 처리하거나 자동 재시도하지 않습니다. 게임과 런처를 종료하고 대기 요청을 취소한 뒤 **종료 후 실행 잠금 복구…**에서 명시적으로 해제하고 새 Play 계획을 검토합니다.
+
+```powershell
+modmesh-cli workspace launcher-plan --game minecraft --path "D:/Prism/instances/MyPack/.minecraft" --launcher "D:/Prism/PrismLauncher.exe"
+modmesh-cli workspace launcher-bind --game minecraft --path "D:/Prism/instances/MyPack/.minecraft" --launcher "D:/Prism/PrismLauncher.exe" --approve LAUNCH_FINGERPRINT
+modmesh-cli workspace play-plan --id PACK_ID --path "D:/Games/Palworld" --expected WORKSPACE_DIGEST
+modmesh-cli workspace play --id PACK_ID --path "D:/Games/Palworld" --expected WORKSPACE_DIGEST --approve PLAY_FINGERPRINT
+modmesh-cli workspace launch-status --game palworld --path "D:/Games/Palworld"
+modmesh-cli workspace launch-release-plan --game palworld --path "D:/Games/Palworld"
+modmesh-cli workspace launch-release --game palworld --path "D:/Games/Palworld" --approve RELEASE_FINGERPRINT --queues-cleared
+```
+
+실행·Play CI는 OS 호출만 모의하고 실제 Steam·Prism·게임을 시작하지 않습니다. 다운로드 권한·해시, 변경 승인, 실행 중 변경 차단, 호출 전후 취소, 강제 종료 후 기록·팩 보존을 검사합니다. 실제 게임별 모드 로딩은 별도 검증이 필요합니다.
+
 
 클라이언트는 `--config <TOML>` 또는 `MODMESH_CONFIG`로 설정을 지정합니다. 기본 파일은 `%APPDATA%/ModMesh/config.toml`이며, 없으면 기본값을 사용합니다. `[client]`에는 `data_dir`, `cache_dir`, `cache_max_bytes`, `server_url`, `log_level`과 `source_priorities`를 지정할 수 있습니다. `MODMESH_DATA_DIR`, `MODMESH_CACHE_DIR`, `MODMESH_CACHE_MAX_BYTES`, `MODMESH_SERVER_URL`, `MODMESH_LOG_LEVEL` 환경 변수가 우선합니다.
 

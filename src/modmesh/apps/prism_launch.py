@@ -4,7 +4,8 @@ from pathlib import Path
 from modmesh.core.config import ClientSettings
 from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.launching import LaunchMethod, LaunchPlan
-from modmesh.core.planning import portable_path, snapshot, target_path
+from modmesh.core.planning import snapshot
+from modmesh.core.prism import prism_instance
 from modmesh.core.workspaces import document_digest
 from modmesh.storage.metadata import MetadataStore
 
@@ -12,15 +13,7 @@ from modmesh.storage.metadata import MetadataStore
 def prism_plan(base: LaunchPlan, executable: Path) -> LaunchPlan:
     if base.game_id != "minecraft" or base.root.name not in {"minecraft", ".minecraft"}:
         raise ModMeshError(ErrorCode.UNSUPPORTED, "Select a verified Prism instance game directory")
-    instance = base.root.parent
-    if instance.parent.name != "instances":
-        raise ModMeshError(
-            ErrorCode.UNSUPPORTED, "Custom Prism instance layouts need manual launch"
-        )
-    identifier = portable_path(instance.name)
-    if "/" in identifier or identifier.startswith("-"):
-        raise ModMeshError(ErrorCode.VALIDATION, "Invalid Prism instance folder identifier")
-    application = instance.parent.parent
+    arguments, instance_digest = prism_instance(base.root)
     if executable.is_symlink() or executable.is_junction():
         raise ModMeshError(ErrorCode.VALIDATION, "Select the Prism executable itself")
     executable = executable.expanduser().resolve(strict=True)
@@ -31,16 +24,6 @@ def prism_plan(base: LaunchPlan, executable: Path) -> LaunchPlan:
     }:
         raise ModMeshError(ErrorCode.UNSUPPORTED, "Select a PrismLauncher executable")
     proof = snapshot(executable)
-    metadata = {
-        "pack": asdict(snapshot(target_path(application, f"instances/{identifier}/mmc-pack.json"))),
-        "config": asdict(
-            snapshot(target_path(application, f"instances/{identifier}/instance.cfg"))
-        ),
-        "application": str(application),
-        "instance": identifier,
-    }
-    instance_digest = document_digest(metadata)
-    arguments = ("--dir", str(application), "--launch", identifier)
     binding_digest = document_digest(
         {
             "target": base.target,

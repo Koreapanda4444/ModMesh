@@ -519,8 +519,12 @@ class WorkspacePanel(QWidget):
             self.dialog.setWindowTitle("Play · 팩 적용과 실행 검토")
             self.dialog.confirm.setText("승인하고 Play")
             self.dialog.acknowledge.setText("팩 변경과 실행 대상을 검토했고 게임을 종료했습니다.")
+            destination = value.launch.executable or value.launch.uri or "기존 런처 수동 실행"
             label = QLabel(
                 f"실행 방식: {value.launch.method.value}\n{value.launch.instruction}\n"
+                f"게임 폴더: {value.launch.root}\n"
+                f"실행 대상: {destination}\n"
+                f"실행 인자: {' '.join(value.launch.arguments)}\n"
                 "실행 요청 성공은 게임 실행이나 모드 로딩 확인을 뜻하지 않습니다."
             )
             label.setWordWrap(True)
@@ -549,6 +553,8 @@ class WorkspacePanel(QWidget):
         )
 
     def perform_play(self, plan: PlayPlan) -> None:
+        if self.busy:
+            return
         self.dialog = None
         self.busy = True
         self.buttons()
@@ -610,9 +616,39 @@ class WorkspacePanel(QWidget):
             assert isinstance(value, dict)
             if generation != self.generation:
                 return
+            attempts = value["attempts"]
+            latest = attempts[0] if attempts else {}
+            outcome = latest.get("state", "none")
+            descriptions = {
+                "none": "기록 없음",
+                "invoking": "호출 전후 중단 · 결과 불확실",
+                "uncertain": "결과 불확실",
+                "accepted": "OS/런처 인계 수락",
+                "failed": "OS 호출 실패",
+                "manual_required": "기존 런처에서 수동 실행 필요",
+            }
             self.status.setText(
-                "실행 요청 기록과 현재 프로세스 관측 (모드 로딩은 미검증)\n"
-                + json.dumps(value, ensure_ascii=False, indent=2)
+                "\n".join(
+                    [
+                        f"최근 실행 요청: {descriptions.get(outcome, outcome)}",
+                        "게임 프로세스: "
+                        + (
+                            "관측됨"
+                            if value["current_observation"]["game_process_observed"]
+                            else "관측되지 않음"
+                        ),
+                        "모드 로딩: 미검증",
+                        "파일 변경 잠금: " + ("유지" if value["mutation_blocked"] else "없음"),
+                        "기록 일치: "
+                        + ("정상" if value["journal_consistent"] else "복구 확인 필요"),
+                        str(latest.get("detail", "")),
+                        "결과가 불확실하면 게임·런처를 확인하세요. "
+                        "종료와 대기 요청 취소 후 실행 잠금을 해제할 수 있습니다."
+                        if value["mutation_blocked"]
+                        else "실행 실패 시 런처 설치와 승인한 실행 경로를 확인한 뒤 "
+                        "새 Play 계획을 검토하세요.",
+                    ]
+                )
             )
 
         self.start(
