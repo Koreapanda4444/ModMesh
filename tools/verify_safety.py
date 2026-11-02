@@ -2663,7 +2663,7 @@ def check_launch_contracts(root: Path) -> None:
         spawn.return_value.poll.return_value = None
         process.return_value.create_time.return_value = 100.0
         assert NativeLaunchBoundary().invoke(prism).state == LaunchCallState.ACCEPTED
-        assert spawn.call_args.args[0] == [str(launcher), *prism.arguments]
+        assert spawn.call_args.args[0] == [str(launcher.resolve(strict=True)), *prism.arguments]
         assert spawn.call_args.kwargs["shell"] is False
         (game.parent / "instance.cfg").write_text("name=Changed configuration")
         try:
