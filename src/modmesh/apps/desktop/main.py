@@ -322,6 +322,7 @@ class MainWindow(QMainWindow):
             "팩 작업공간 적용",
             "팩 작업공간 복구",
             "팩 이전 버전 복원",
+            "팩 Play 실행",
         }
         if self.closing:
             worker.cancel()

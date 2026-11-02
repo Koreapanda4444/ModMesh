@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -23,6 +24,8 @@ from PySide6.QtWidgets import (
 from modmesh.apps.desktop.search import WorkStarter
 from modmesh.apps.desktop.widgets import fill_row, table
 from modmesh.apps.desktop.workers import report_progress, run_async
+from modmesh.apps.launch_planning import prepare_launch
+from modmesh.apps.prism_launch import bind_prism, prism_plan
 from modmesh.apps.workspace_activation import (
     WorkspaceActivation,
     apply_workspace,
@@ -32,11 +35,13 @@ from modmesh.apps.workspace_activation import (
 from modmesh.apps.workspace_artifacts import import_local
 from modmesh.apps.workspace_legacy import adopt_profile
 from modmesh.apps.workspace_lifecycle import freeze_workspace
+from modmesh.apps.workspace_play import PlayPlan, apply_play, prepare_play
 from modmesh.apps.workspace_restore import WorkspaceRestore, apply_restore, prepare_restore
 from modmesh.apps.workspace_updates import WorkspaceUpdate, prepare_update, save_update
 from modmesh.core.compatibility import inspect_compatibility
 from modmesh.core.config import ClientSettings
 from modmesh.core.games import GameCapability, GameRegistry
+from modmesh.core.launching import LaunchPlan
 from modmesh.core.pack_io import read_manifest
 from modmesh.core.packs import PackEntry
 from modmesh.core.profiles import Profile
@@ -127,6 +132,27 @@ class BranchDialog(QDialog):
         layout.addWidget(buttons)
 
 
+class LauncherDialog(QDialog):
+    def __init__(self, plan: LaunchPlan, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Prism 실행 연결 검토")
+        self.resize(760, 470)
+        layout = QVBoxLayout(self)
+        preview = QTextEdit()
+        preview.setReadOnly(True)
+        preview.setPlainText(json.dumps(plan.document(), ensure_ascii=False, indent=2))
+        layout.addWidget(preview)
+        self.acknowledge = QCheckBox("선택한 Prism 실행 파일과 인스턴스를 확인했습니다.")
+        layout.addWidget(self.acknowledge)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
+        self.confirm = buttons.addButton("승인하고 연결", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.confirm.setEnabled(False)
+        self.acknowledge.toggled.connect(self.confirm.setEnabled)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+
 class WorkspacePanel(QWidget):
     def __init__(
         self,
@@ -143,7 +169,7 @@ class WorkspacePanel(QWidget):
         self.changed = changed or (lambda: None)
         self.busy = False
         self.activation: WorkspaceActivation | None = None
-        self.dialog: WorkspaceDialog | BranchDialog | None = None
+        self.dialog: WorkspaceDialog | BranchDialog | LauncherDialog | None = None
         self.branch_kinds: dict[str, str] = {}
         self.histories: dict[str, tuple[PackSnapshot, ...]] = {}
         self.setAcceptDrops(True)
@@ -189,6 +215,12 @@ class WorkspacePanel(QWidget):
         self.recover_button = QPushButton("중단된 팩 복구")
         self.recover_button.clicked.connect(self.recover_activation)
         row.addWidget(self.recover_button)
+        self.play_button = QPushButton("Play · 준비하고 실행")
+        self.play_button.clicked.connect(self.review_play)
+        row.addWidget(self.play_button)
+        self.launcher_button = QPushButton("Prism 연결…")
+        self.launcher_button.clicked.connect(self.choose_launcher)
+        row.addWidget(self.launcher_button)
         layout.addLayout(row)
         row = QHBoxLayout()
         self.update_button = QPushButton("현재 환경으로 새 개정 검토")
@@ -362,6 +394,10 @@ class WorkspacePanel(QWidget):
         self.snapshot_button.setEnabled(enabled and self.workspace is not None)
         self.adopt_button.setEnabled(enabled and self.legacy_profile.count() > 0)
         self.preview_button.setEnabled(bool(profiles) and self.workspace is not None)
+        self.play_button.setEnabled(bool(profiles) and self.workspace is not None)
+        self.launcher_button.setEnabled(
+            enabled and self.installation is not None and self.installation.game_id == "minecraft"
+        )
         self.recover_button.setEnabled(bool(profiles))
         self.update_button.setEnabled(bool(profiles) and editable)
         self.manifest_update_button.setEnabled(bool(profiles) and editable)
@@ -423,6 +459,119 @@ class WorkspacePanel(QWidget):
             prepared,
             self.activation_failed,
             name="팩 적용 계획",
+        )
+
+    def review_play(self) -> None:
+        workspace, installation = self.workspace, self.installation
+        if workspace is None or installation is None or self.busy:
+            return
+        self.busy = True
+        self.buttons()
+        generation = self.generation
+
+        def reviewed(value: object) -> None:
+            self.busy = False
+            self.buttons()
+            assert isinstance(value, PlayPlan)
+            if (
+                generation != self.generation
+                or self.workspace is None
+                or self.workspace.digest != workspace.digest
+            ):
+                return
+            self.discard_activation()
+            self.dialog = WorkspaceDialog(value.activation, self)
+            self.dialog.setWindowTitle("Play · 팩 적용과 실행 검토")
+            self.dialog.confirm.setText("승인하고 Play")
+            self.dialog.acknowledge.setText("팩 변경과 실행 대상을 검토했고 게임을 종료했습니다.")
+            label = QLabel(
+                f"실행 방식: {value.launch.method.value}\n{value.launch.instruction}\n"
+                "실행 요청 성공은 게임 실행이나 모드 로딩 확인을 뜻하지 않습니다."
+            )
+            label.setWordWrap(True)
+            layout = self.dialog.layout()
+            assert layout is not None
+            layout.addWidget(label)
+            self.dialog.rejected.connect(self.discard_activation)
+            self.dialog.accepted.connect(lambda: self.perform_play(value))
+            self.dialog.open()
+
+        self.start(
+            lambda cancelled: run_async(
+                prepare_play(
+                    self.settings,
+                    workspace.pack_id,
+                    installation,
+                    workspace.digest,
+                    cancelled=cancelled,
+                    progress=report_progress,
+                ),
+                cancelled,
+            ),
+            reviewed,
+            self.activation_failed,
+            name="Play 준비",
+        )
+
+    def perform_play(self, plan: PlayPlan) -> None:
+        self.dialog = None
+        self.busy = True
+        self.buttons()
+
+        def completed(value: object) -> None:
+            assert isinstance(value, dict)
+            self.busy = False
+            self.buttons()
+            self.changed()
+            self.status.setText(
+                f"실행 요청: {value.get('state')}\n{value.get('detail', '')}\n"
+                "모드 로딩: 미검증. 재실행 전 실행 상태를 확인하세요."
+            )
+
+        self.start(
+            lambda cancelled: apply_play(
+                self.settings, plan, plan.fingerprint, cancelled=cancelled, progress=report_progress
+            ),
+            completed,
+            self.activation_failed,
+            name="팩 Play 실행",
+        )
+
+    def choose_launcher(self) -> None:
+        installation = self.installation
+        if installation is None or self.busy:
+            return
+        filename, _ = QFileDialog.getOpenFileName(self, "PrismLauncher 실행 파일 선택")
+        if not filename:
+            return
+        generation = self.generation
+
+        def reviewed(value: object) -> None:
+            assert isinstance(value, LaunchPlan)
+            if generation != self.generation:
+                return
+            self.discard_activation()
+            self.dialog = LauncherDialog(value, self)
+            self.dialog.rejected.connect(self.discard_activation)
+            self.dialog.accepted.connect(lambda: self.save_launcher(value))
+            self.dialog.open()
+
+        self.start(
+            lambda _cancelled: prism_plan(
+                prepare_launch(self.settings, installation, use_binding=False), Path(filename)
+            ),
+            reviewed,
+            self.failed,
+            name="Prism 연결 검토",
+        )
+
+    def save_launcher(self, plan: LaunchPlan) -> None:
+        self.dialog = None
+        self.start(
+            lambda _cancelled: bind_prism(self.settings, plan, plan.fingerprint),
+            lambda _value: self.status.setText("선택한 Prism 인스턴스 실행을 연결했습니다."),
+            self.failed,
+            name="Prism 연결 저장",
         )
 
     def apply_activation(self) -> None:

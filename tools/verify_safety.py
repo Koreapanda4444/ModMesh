@@ -2705,11 +2705,35 @@ async def check_launch_guards(root: Path) -> None:
         assert any(issue.code == "launch_pending" for issue in removal.issues)
 
 
+async def check_workspace_play(root: Path) -> None:
+    from modmesh.apps.workspace_play import apply_play, prepare_play
+
+    settings, installation, (workspace, _) = await workspace_setup(root)
+    plan = await prepare_play(settings, workspace.pack_id, installation, workspace.digest)
+    repeated = await prepare_play(settings, workspace.pack_id, installation, workspace.digest)
+    assert repeated.fingerprint == plan.fingerprint
+    with patch("modmesh.apps.guarded_launch.NativeLaunchBoundary") as boundary:
+        boundary.return_value.invoke.return_value = LaunchCall(LaunchCallState.ACCEPTED)
+        try:
+            apply_play(settings, plan, "wrong")
+        except ModMeshError:
+            pass
+        else:
+            raise AssertionError("Play accepted a different file and launch approval")
+        assert not boundary.return_value.invoke.called
+        result = apply_play(settings, repeated, repeated.fingerprint)
+        assert result["state"] == "accepted" and result["mod_loading"] == "unverified"
+        assert result["activation"]["lock_digest"] == plan.activation.lock.digest
+        assert (installation.path / "Pal/Content/Paks/~mods/A.pak").exists()
+        assert boundary.return_value.invoke.call_count == 1
+
+
 async def main() -> None:
     logging.disable(logging.CRITICAL)
     with TemporaryDirectory(prefix="modmesh-safety-") as name:
         check_launch_contracts(Path(name) / "launch-contracts")
         await check_launch_guards(Path(name) / "launch-guards")
+        await check_workspace_play(Path(name) / "workspace-play")
         check_workspace_metadata(Path(name) / "workspaces")
         check_workspace_legacy(Path(name) / "workspace-legacy")
         await check_workspace_import(Path(name) / "workspace-import")

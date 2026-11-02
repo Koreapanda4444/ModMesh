@@ -20,6 +20,7 @@ from modmesh.apps.workspace_artifacts import import_local
 from modmesh.apps.workspace_environment import inspect_workspace_environment
 from modmesh.apps.workspace_legacy import adopt_profile, import_manifest_workspace
 from modmesh.apps.workspace_lifecycle import freeze_workspace, write_lock
+from modmesh.apps.workspace_play import apply_play, prepare_play
 from modmesh.apps.workspace_restore import apply_restore, prepare_restore
 from modmesh.apps.workspace_updates import prepare_update, save_update
 from modmesh.core.compatibility import inspect_compatibility
@@ -81,6 +82,8 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
             "launch-plan",
             "launcher-plan",
             "launcher-bind",
+            "play-plan",
+            "play",
         ),
     )
     parser.add_argument("--game")
@@ -105,6 +108,22 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
 
 
 def workspace_command(args: argparse.Namespace, settings: ClientSettings) -> int:
+    if args.action in {"play-plan", "play"}:
+        if not args.pack_id or args.path is None or not args.expected:
+            raise ModMeshError(ErrorCode.VALIDATION, "Play needs --id, --path and --expected")
+        with MetadataStore(settings.paths.database) as database:
+            selected = WorkspaceStore(database).get(args.pack_id)
+        installation = GameLibrary(create_game_registry(settings), settings.paths.database).inspect(
+            selected.game_id, args.path, DiscoveryContext(current_platform())
+        )
+        play = asyncio.run(prepare_play(settings, selected.pack_id, installation, args.expected))
+        play_result = (
+            apply_play(settings, play, args.approve or "")
+            if args.action == "play"
+            else play.document()
+        )
+        print(json.dumps(play_result, ensure_ascii=False))
+        return 0
     if args.action in {"launch-plan", "launcher-plan", "launcher-bind"}:
         if not args.game or args.path is None:
             raise ModMeshError(ErrorCode.VALIDATION, "Launch preview needs --game and --path")
