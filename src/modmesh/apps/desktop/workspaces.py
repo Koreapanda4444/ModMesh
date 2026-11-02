@@ -25,6 +25,7 @@ from modmesh.apps.desktop.search import WorkStarter
 from modmesh.apps.desktop.widgets import fill_row, table
 from modmesh.apps.desktop.workers import report_progress, run_async
 from modmesh.apps.launch_planning import prepare_launch
+from modmesh.apps.launch_status import launch_status
 from modmesh.apps.prism_launch import bind_prism, prism_plan
 from modmesh.apps.workspace_activation import (
     WorkspaceActivation,
@@ -222,6 +223,9 @@ class WorkspacePanel(QWidget):
         self.launcher_button.clicked.connect(self.choose_launcher)
         row.addWidget(self.launcher_button)
         layout.addLayout(row)
+        self.launch_status_button = QPushButton("실행 상태와 적용 팩 확인")
+        self.launch_status_button.clicked.connect(self.inspect_launch)
+        layout.addWidget(self.launch_status_button)
         row = QHBoxLayout()
         self.update_button = QPushButton("현재 환경으로 새 개정 검토")
         self.update_button.clicked.connect(lambda: self.review_update())
@@ -399,6 +403,7 @@ class WorkspacePanel(QWidget):
             enabled and self.installation is not None and self.installation.game_id == "minecraft"
         )
         self.recover_button.setEnabled(bool(profiles))
+        self.launch_status_button.setEnabled(enabled)
         self.update_button.setEnabled(bool(profiles) and editable)
         self.manifest_update_button.setEnabled(bool(profiles) and editable)
         self.restore_button.setEnabled(
@@ -563,6 +568,28 @@ class WorkspacePanel(QWidget):
             reviewed,
             self.failed,
             name="Prism 연결 검토",
+        )
+
+    def inspect_launch(self) -> None:
+        installation = self.installation
+        if installation is None or self.busy:
+            return
+        generation = self.generation
+
+        def inspected(value: object) -> None:
+            assert isinstance(value, dict)
+            if generation != self.generation:
+                return
+            self.status.setText(
+                "실행 요청 기록과 현재 프로세스 관측 (모드 로딩은 미검증)\n"
+                + json.dumps(value, ensure_ascii=False, indent=2)
+            )
+
+        self.start(
+            lambda _cancelled: launch_status(self.settings, installation),
+            inspected,
+            self.failed,
+            name="실행 상태 확인",
         )
 
     def save_launcher(self, plan: LaunchPlan) -> None:

@@ -2706,7 +2706,10 @@ async def check_launch_guards(root: Path) -> None:
 
 
 async def check_workspace_play(root: Path) -> None:
+    from modmesh.apps.launch_status import launch_status
     from modmesh.apps.workspace_play import apply_play, prepare_play
+    from modmesh.core.games import EnvironmentIssue, EnvironmentReport
+    from modmesh.core.launch_receipts import save_launch_receipt
 
     settings, installation, (workspace, _) = await workspace_setup(root)
     plan = await prepare_play(settings, workspace.pack_id, installation, workspace.digest)
@@ -2726,6 +2729,27 @@ async def check_workspace_play(root: Path) -> None:
         assert result["activation"]["lock_digest"] == plan.activation.lock.digest
         assert (installation.path / "Pal/Content/Paks/~mods/A.pak").exists()
         assert boundary.return_value.invoke.call_count == 1
+        status = launch_status(settings, installation)
+        assert status["mutation_blocked"] and status["journal_consistent"]
+        assert status["attempts"][0] == result
+        assert not status["current_observation"]["game_process_observed"]
+        with patch(
+            "modmesh.adapters.games.palworld.PalworldAdapter.validate_operation",
+            return_value=EnvironmentReport(
+                (EnvironmentIssue("game_running", "Observed selected game", True),)
+            ),
+        ):
+            observed = launch_status(settings, installation)
+            assert observed["current_observation"]["game_process_observed"]
+            assert observed["current_observation"]["mod_loading"] == "unverified"
+            assert observed["attempts"][0]["game_process_observed"] is False
+        with MetadataStore(settings.paths.database) as database:
+            try:
+                save_launch_receipt(database, {**result, "state": "failed"})
+            except ModMeshError:
+                pass
+            else:
+                raise AssertionError("Completed launch receipt was rewritten")
 
 
 async def main() -> None:

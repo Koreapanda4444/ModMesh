@@ -9,8 +9,9 @@ from modmesh.apps.workspace_activation import _activation_lease
 from modmesh.apps.workspace_environment import verify_locked_environment
 from modmesh.apps.workspace_legacy import activation_target, profile_configuration_digest
 from modmesh.core.config import ClientSettings
-from modmesh.core.diagnostics import ErrorCode, ModMeshError
+from modmesh.core.diagnostics import ErrorCode, ModMeshError, redact_text
 from modmesh.core.installation import _check_cancelled
+from modmesh.core.launch_receipts import save_launch_receipt
 from modmesh.core.launching import (
     LaunchBoundary,
     LaunchCall,
@@ -74,10 +75,20 @@ def guarded_launch(
                 "mod_loading": "unverified",
             }
             store.put("launch.guard", "active", record)
-            if plan.method == LaunchMethod.MANUAL:
-                call = LaunchCall(LaunchCallState.MANUAL, detail=plan.instruction)
-            else:
-                call = (boundary or NativeLaunchBoundary()).invoke(plan)
+            save_launch_receipt(store, record)
+            with MetadataStore(settings.paths.database) as database:
+                save_launch_receipt(database, record)
+            try:
+                if plan.method == LaunchMethod.MANUAL:
+                    call = LaunchCall(LaunchCallState.MANUAL, detail=plan.instruction)
+                else:
+                    call = (boundary or NativeLaunchBoundary()).invoke(plan)
+            except Exception as exc:
+                call = LaunchCall(LaunchCallState.UNCERTAIN, detail=redact_text(str(exc))[:4096])
             record.update(call.document())
+            record["updated_at"] = datetime.now(UTC).isoformat()
             store.put("launch.guard", "active", record)
+            save_launch_receipt(store, record)
+            with MetadataStore(settings.paths.database) as database:
+                save_launch_receipt(database, record)
             return record

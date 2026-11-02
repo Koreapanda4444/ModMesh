@@ -7,6 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from modmesh.apps.launch_planning import prepare_launch
+from modmesh.apps.launch_status import launch_status
 from modmesh.apps.library import GameLibrary
 from modmesh.apps.prism_launch import bind_prism, prism_plan
 from modmesh.apps.runtime import create_game_registry
@@ -84,6 +85,7 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
             "launcher-bind",
             "play-plan",
             "play",
+            "launch-status",
         ),
     )
     parser.add_argument("--game")
@@ -124,12 +126,15 @@ def workspace_command(args: argparse.Namespace, settings: ClientSettings) -> int
         )
         print(json.dumps(play_result, ensure_ascii=False))
         return 0
-    if args.action in {"launch-plan", "launcher-plan", "launcher-bind"}:
+    if args.action in {"launch-plan", "launcher-plan", "launcher-bind", "launch-status"}:
         if not args.game or args.path is None:
             raise ModMeshError(ErrorCode.VALIDATION, "Launch preview needs --game and --path")
         installation = GameLibrary(create_game_registry(settings), settings.paths.database).inspect(
             args.game, args.path, DiscoveryContext(current_platform())
         )
+        if args.action == "launch-status":
+            print(json.dumps(launch_status(settings, installation), ensure_ascii=False))
+            return 0
         launch = prepare_launch(settings, installation, use_binding=args.action == "launch-plan")
         if args.action != "launch-plan":
             if args.launcher is None:
