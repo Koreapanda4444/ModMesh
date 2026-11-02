@@ -8,6 +8,7 @@ from pathlib import Path
 
 from modmesh.apps.launch_planning import prepare_launch
 from modmesh.apps.library import GameLibrary
+from modmesh.apps.prism_launch import bind_prism, prism_plan
 from modmesh.apps.runtime import create_game_registry
 from modmesh.apps.workspace_activation import (
     active_workspace,
@@ -78,6 +79,8 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
             "restore-plan",
             "restore",
             "launch-plan",
+            "launcher-plan",
+            "launcher-bind",
         ),
     )
     parser.add_argument("--game")
@@ -95,19 +98,26 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
     parser.add_argument("--output", type=Path)
     parser.add_argument("--snapshot")
     parser.add_argument("--profile")
+    parser.add_argument("--launcher", type=Path)
     parser.add_argument(
         "--allow-pinned", action="append", default=[], help="Explicit SOURCE:PROJECT pin override"
     )
 
 
 def workspace_command(args: argparse.Namespace, settings: ClientSettings) -> int:
-    if args.action == "launch-plan":
+    if args.action in {"launch-plan", "launcher-plan", "launcher-bind"}:
         if not args.game or args.path is None:
             raise ModMeshError(ErrorCode.VALIDATION, "Launch preview needs --game and --path")
         installation = GameLibrary(create_game_registry(settings), settings.paths.database).inspect(
             args.game, args.path, DiscoveryContext(current_platform())
         )
-        launch = prepare_launch(settings, installation)
+        launch = prepare_launch(settings, installation, use_binding=args.action == "launch-plan")
+        if args.action != "launch-plan":
+            if args.launcher is None:
+                raise ModMeshError(ErrorCode.VALIDATION, "Select --launcher PATH")
+            launch = prism_plan(launch, args.launcher)
+            if args.action == "launcher-bind":
+                bind_prism(settings, launch, args.approve or "")
         print(
             json.dumps({**launch.document(), "fingerprint": launch.fingerprint}, ensure_ascii=False)
         )

@@ -1,5 +1,6 @@
 from dataclasses import replace
 
+from modmesh.apps.prism_launch import bound_prism
 from modmesh.apps.runtime import create_game_registry
 from modmesh.apps.workspace_legacy import activation_target
 from modmesh.core.config import ClientSettings
@@ -11,7 +12,9 @@ from modmesh.domain.models import GameInstallation
 from modmesh.storage.rules import load_rules
 
 
-def prepare_launch(settings: ClientSettings, installation: GameInstallation) -> LaunchPlan:
+def prepare_launch(
+    settings: ClientSettings, installation: GameInstallation, *, use_binding: bool = True
+) -> LaunchPlan:
     registered = load_rules(settings.paths.database).get(installation.game_id)
     if not registered.approved:
         raise ModMeshError(ErrorCode.CONFLICT, "Launch needs an approved game rule")
@@ -58,9 +61,12 @@ def prepare_launch(settings: ClientSettings, installation: GameInstallation) -> 
             arguments=definition.arguments,
             instruction="Start only the executable selected by the approved rule",
         )
-    return replace(
+    manual = replace(
         common,
         method=LaunchMethod.MANUAL,
         instruction="Apply the selected pack, then launch this exact game instance "
         "in its existing launcher",
+    )
+    return (
+        bound_prism(settings, manual) if current.game_id == "minecraft" and use_binding else manual
     )

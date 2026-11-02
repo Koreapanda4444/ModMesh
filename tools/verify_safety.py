@@ -2570,6 +2570,8 @@ def check_legacy_contracts(root: Path) -> None:
 
 
 def check_launch_contracts(root: Path) -> None:
+    from modmesh.apps.prism_launch import bind_prism, bound_prism, prism_plan
+
     root.mkdir()
     plan = LaunchPlan(
         "palworld",
@@ -2636,6 +2638,28 @@ def check_launch_contracts(root: Path) -> None:
         else:
             raise AssertionError("Changed executable was launched")
         assert spawn.call_count == 1
+    game = root / "PrismLauncher/instances/selected/.minecraft"
+    game.mkdir(parents=True)
+    (game.parent / "mmc-pack.json").write_text('{"formatVersion":1}')
+    (game.parent / "instance.cfg").write_text("name=Selected instance")
+    launcher = root / "PrismLauncher.exe"
+    launcher.write_bytes(b"launcher fixture; never execute")
+    info = game.stat()
+    minecraft = replace(
+        plan, game_id="minecraft", root=game, root_device=info.st_dev, root_inode=info.st_ino
+    )
+    prism = prism_plan(minecraft, launcher)
+    assert prism.arguments == ("--dir", str(root / "PrismLauncher"), "--launch", "selected")
+    settings = ClientSettings(AppPaths(root / "cfg", root / "data", root / "cache"))
+    bind_prism(settings, prism, prism.fingerprint)
+    assert bound_prism(settings, minecraft).fingerprint == prism.fingerprint
+    (game.parent / "instance.cfg").write_text("name=Changed configuration")
+    try:
+        bound_prism(settings, minecraft)
+    except ModMeshError:
+        pass
+    else:
+        raise AssertionError("Changed Prism instance reused its previous approval")
 
 
 async def main() -> None:
