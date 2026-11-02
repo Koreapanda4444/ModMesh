@@ -22,6 +22,7 @@ from modmesh.core.installation import (
     _copy,
     _sync_dir,
 )
+from modmesh.core.launch_guard import require_launch_idle
 from modmesh.core.planning import (
     FileSnapshot,
     InstallationPlan,
@@ -177,6 +178,7 @@ class ProfileManager(RemovalManager):
         }
 
     def _ready(self, store: MetadataStore) -> None:
+        require_launch_idle(store)
         if any(
             value.get("state") not in {"committed", "rolled_back", "failed"}
             for _, value in store.list("install.operations")
@@ -611,6 +613,11 @@ class ProfileManager(RemovalManager):
 
     @contextmanager
     def verified_active(self, identity: str) -> Iterator[Profile]:
+        with self.verified_active_state(identity) as (profile, _):
+            yield profile
+
+    @contextmanager
+    def verified_active_state(self, identity: str) -> Iterator[tuple[Profile, MetadataStore]]:
         with self._locked() as store:
             if store is None:
                 raise ModMeshError(ErrorCode.NOT_FOUND, "Profile state is unavailable")
@@ -618,12 +625,13 @@ class ProfileManager(RemovalManager):
             if self._active(store) != identity:
                 raise ModMeshError(ErrorCode.CONFLICT, "A different profile is active")
             current = self._get(store, identity)
-            yield self._capture(
+            profile = self._capture(
                 store,
                 identity,
                 current.name,
                 tuple(item.path for item in current.files if item.setting),
             )
+            yield profile, store
 
     def stage_history_profile(self, source: Profile, name: str) -> ProfilePlan:
         if not name.strip() or len(name) > 100:

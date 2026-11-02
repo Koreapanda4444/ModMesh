@@ -2662,10 +2662,54 @@ def check_launch_contracts(root: Path) -> None:
         raise AssertionError("Changed Prism instance reused its previous approval")
 
 
+async def check_launch_guards(root: Path) -> None:
+    from modmesh.apps.guarded_launch import guarded_launch
+    from modmesh.apps.launch_planning import prepare_launch
+
+    settings, installation, (workspace, _) = await workspace_setup(root)
+    activation = await prepare_workspace(
+        settings, workspace.pack_id, installation, workspace.digest
+    )
+    receipt = apply_workspace(settings, activation, activation.fingerprint)
+    launch = prepare_launch(settings, installation)
+    cancelled = threading.Event()
+    cancelled.set()
+    with patch("modmesh.apps.guarded_launch.NativeLaunchBoundary") as boundary:
+        boundary.return_value.invoke.return_value = LaunchCall(LaunchCallState.ACCEPTED)
+        for approval, cancellation in (("incorrect", None), (launch.fingerprint, cancelled)):
+            try:
+                guarded_launch(
+                    settings, installation, launch, receipt, approval, cancelled=cancellation
+                )
+            except ModMeshError:
+                pass
+            else:
+                raise AssertionError("Launch bypassed approval or cancellation")
+        assert not boundary.return_value.invoke.called
+        result = guarded_launch(settings, installation, launch, receipt, launch.fingerprint)
+        assert result["state"] == "accepted"
+        for operation in (
+            lambda: guarded_launch(settings, installation, launch, receipt, launch.fingerprint),
+            lambda: activation.manager.plan_switch(receipt.profile_id),
+            lambda: activation.manager.recover(),
+        ):
+            try:
+                operation()
+            except ModMeshError:
+                pass
+            else:
+                raise AssertionError("Pending launch allowed a duplicate call or file mutation")
+        assert boundary.return_value.invoke.call_count == 1
+        removal = activation.manager.plan_removal((workspace.entries[0].mod.project.reference,))
+        assert not removal.applicable
+        assert any(issue.code == "launch_pending" for issue in removal.issues)
+
+
 async def main() -> None:
     logging.disable(logging.CRITICAL)
     with TemporaryDirectory(prefix="modmesh-safety-") as name:
         check_launch_contracts(Path(name) / "launch-contracts")
+        await check_launch_guards(Path(name) / "launch-guards")
         check_workspace_metadata(Path(name) / "workspaces")
         check_workspace_legacy(Path(name) / "workspace-legacy")
         await check_workspace_import(Path(name) / "workspace-import")

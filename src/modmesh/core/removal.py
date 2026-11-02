@@ -18,6 +18,7 @@ from modmesh.core.installation import (
     _same,
     _sync_dir,
 )
+from modmesh.core.launch_guard import launch_hold
 from modmesh.core.planning import FileSnapshot, PlanIssue, snapshot, target_path
 from modmesh.domain.models import GameInstallation, SourceRef
 from modmesh.storage.installed import (
@@ -100,6 +101,10 @@ class RemovalManager(InstallationManager):
         changes = []
         issues = []
         warnings = []
+        if launch_hold(store) is not None:
+            issues.append(
+                PlanIssue("launch_pending", "Release the pending launch before removing files")
+            )
         selected = {mod_key(ref) for ref in references}
         files = self._file_records(store)
         if not selected:

@@ -19,6 +19,7 @@ from modmesh.core.diagnostics import ErrorCode, ModMeshError
 from modmesh.core.downloads import publish_file
 from modmesh.core.games import GameRegistry
 from modmesh.core.hashing import verify_file
+from modmesh.core.launch_guard import launch_hold, require_launch_idle
 from modmesh.core.planning import (
     FileSnapshot,
     InstallationPlan,
@@ -242,6 +243,10 @@ class InstallationManager:
             cancelled=cancelled,
         )
         issues = list(plan.issues)
+        if launch_hold(store) is not None:
+            issues.append(
+                PlanIssue("launch_pending", "Release the pending launch before changing files")
+            )
         installing = {mod_key(mod.project.reference) for mod in resolution.mods}
         if store is not None:
             if any(
@@ -809,6 +814,7 @@ class InstallationManager:
         with self._locked() as store:
             if store is None:
                 return ()
+            require_launch_idle(store)
             root = self.root.stat(follow_symlinks=False)
             for key, record in store.list("install.operations"):
                 if record.get("state") in _TERMINAL:
