@@ -25,6 +25,7 @@ from modmesh.apps.desktop.search import WorkStarter
 from modmesh.apps.desktop.widgets import fill_row, table
 from modmesh.apps.desktop.workers import report_progress, run_async
 from modmesh.apps.launch_planning import prepare_launch
+from modmesh.apps.launch_recovery import LaunchRelease, prepare_launch_release, release_launch
 from modmesh.apps.launch_status import launch_status
 from modmesh.apps.prism_launch import bind_prism, prism_plan
 from modmesh.apps.workspace_activation import (
@@ -154,6 +155,29 @@ class LauncherDialog(QDialog):
         layout.addWidget(buttons)
 
 
+class LaunchRecoveryDialog(QDialog):
+    def __init__(self, plan: LaunchRelease, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("실행 잠금 복구")
+        layout = QVBoxLayout(self)
+        text = QLabel(
+            "게임과 런처를 종료하고 대기 중인 실행 요청을 모두 취소하세요.\n"
+            "적용된 팩과 이전 스냅샷은 보존합니다. 자동으로 재실행하지 않습니다.\n"
+            f"기록된 요청 결과: {plan.guard['state']}"
+        )
+        text.setWordWrap(True)
+        layout.addWidget(text)
+        self.acknowledge = QCheckBox("게임·런처 종료와 대기 중인 요청 취소를 확인했습니다.")
+        layout.addWidget(self.acknowledge)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
+        self.confirm = buttons.addButton("실행 잠금 해제", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.confirm.setEnabled(False)
+        self.acknowledge.toggled.connect(self.confirm.setEnabled)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+
 class WorkspacePanel(QWidget):
     def __init__(
         self,
@@ -170,7 +194,9 @@ class WorkspacePanel(QWidget):
         self.changed = changed or (lambda: None)
         self.busy = False
         self.activation: WorkspaceActivation | None = None
-        self.dialog: WorkspaceDialog | BranchDialog | LauncherDialog | None = None
+        self.dialog: (
+            WorkspaceDialog | BranchDialog | LauncherDialog | LaunchRecoveryDialog | None
+        ) = None
         self.branch_kinds: dict[str, str] = {}
         self.histories: dict[str, tuple[PackSnapshot, ...]] = {}
         self.setAcceptDrops(True)
@@ -226,6 +252,9 @@ class WorkspacePanel(QWidget):
         self.launch_status_button = QPushButton("실행 상태와 적용 팩 확인")
         self.launch_status_button.clicked.connect(self.inspect_launch)
         layout.addWidget(self.launch_status_button)
+        self.launch_release_button = QPushButton("종료 후 실행 잠금 복구…")
+        self.launch_release_button.clicked.connect(self.review_launch_release)
+        layout.addWidget(self.launch_release_button)
         row = QHBoxLayout()
         self.update_button = QPushButton("현재 환경으로 새 개정 검토")
         self.update_button.clicked.connect(lambda: self.review_update())
@@ -404,6 +433,7 @@ class WorkspacePanel(QWidget):
         )
         self.recover_button.setEnabled(bool(profiles))
         self.launch_status_button.setEnabled(enabled)
+        self.launch_release_button.setEnabled(enabled)
         self.update_button.setEnabled(bool(profiles) and editable)
         self.manifest_update_button.setEnabled(bool(profiles) and editable)
         self.restore_button.setEnabled(
@@ -590,6 +620,48 @@ class WorkspacePanel(QWidget):
             inspected,
             self.failed,
             name="실행 상태 확인",
+        )
+
+    def review_launch_release(self) -> None:
+        installation = self.installation
+        if installation is None or self.busy:
+            return
+        generation = self.generation
+
+        def reviewed(value: object) -> None:
+            assert isinstance(value, LaunchRelease)
+            if generation != self.generation:
+                return
+            self.discard_activation()
+            self.dialog = LaunchRecoveryDialog(value, self)
+            self.dialog.rejected.connect(self.discard_activation)
+            self.dialog.accepted.connect(lambda: self.perform_launch_release(installation, value))
+            self.dialog.open()
+
+        self.start(
+            lambda _cancelled: prepare_launch_release(self.settings, installation),
+            reviewed,
+            self.failed,
+            name="실행 잠금 복구 검토",
+        )
+
+    def perform_launch_release(self, installation: GameInstallation, plan: LaunchRelease) -> None:
+        self.dialog = None
+
+        def completed(_value: object) -> None:
+            self.changed()
+            self.status.setText(
+                "실행 잠금을 해제했습니다. 팩과 스냅샷은 보존됐습니다. "
+                "다시 실행하려면 새 Play 계획을 검토하세요."
+            )
+
+        self.start(
+            lambda _cancelled: release_launch(
+                self.settings, installation, plan, plan.fingerprint, queues_cleared=True
+            ),
+            completed,
+            self.failed,
+            name="실행 잠금 해제",
         )
 
     def save_launcher(self, plan: LaunchPlan) -> None:

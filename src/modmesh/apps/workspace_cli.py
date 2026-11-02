@@ -7,6 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from modmesh.apps.launch_planning import prepare_launch
+from modmesh.apps.launch_recovery import prepare_launch_release, release_launch
 from modmesh.apps.launch_status import launch_status
 from modmesh.apps.library import GameLibrary
 from modmesh.apps.prism_launch import bind_prism, prism_plan
@@ -86,6 +87,8 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
             "play-plan",
             "play",
             "launch-status",
+            "launch-release-plan",
+            "launch-release",
         ),
     )
     parser.add_argument("--game")
@@ -104,6 +107,7 @@ def configure_workspace_cli(commands: argparse._SubParsersAction[argparse.Argume
     parser.add_argument("--snapshot")
     parser.add_argument("--profile")
     parser.add_argument("--launcher", type=Path)
+    parser.add_argument("--queues-cleared", action="store_true")
     parser.add_argument(
         "--allow-pinned", action="append", default=[], help="Explicit SOURCE:PROJECT pin override"
     )
@@ -126,7 +130,14 @@ def workspace_command(args: argparse.Namespace, settings: ClientSettings) -> int
         )
         print(json.dumps(play_result, ensure_ascii=False))
         return 0
-    if args.action in {"launch-plan", "launcher-plan", "launcher-bind", "launch-status"}:
+    if args.action in {
+        "launch-plan",
+        "launcher-plan",
+        "launcher-bind",
+        "launch-status",
+        "launch-release-plan",
+        "launch-release",
+    }:
         if not args.game or args.path is None:
             raise ModMeshError(ErrorCode.VALIDATION, "Launch preview needs --game and --path")
         installation = GameLibrary(create_game_registry(settings), settings.paths.database).inspect(
@@ -134,6 +145,21 @@ def workspace_command(args: argparse.Namespace, settings: ClientSettings) -> int
         )
         if args.action == "launch-status":
             print(json.dumps(launch_status(settings, installation), ensure_ascii=False))
+            return 0
+        if args.action in {"launch-release-plan", "launch-release"}:
+            release = prepare_launch_release(settings, installation)
+            released = (
+                release_launch(
+                    settings,
+                    installation,
+                    release,
+                    args.approve or "",
+                    queues_cleared=args.queues_cleared,
+                )
+                if args.action == "launch-release"
+                else release.document()
+            )
+            print(json.dumps(released, ensure_ascii=False))
             return 0
         launch = prepare_launch(settings, installation, use_binding=args.action == "launch-plan")
         if args.action != "launch-plan":

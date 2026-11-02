@@ -2752,12 +2752,68 @@ async def check_workspace_play(root: Path) -> None:
                 raise AssertionError("Completed launch receipt was rewritten")
 
 
+async def check_launch_recovery(root: Path) -> None:
+    from modmesh.apps.launch_recovery import prepare_launch_release, release_launch
+    from modmesh.apps.launch_status import launch_status
+    from modmesh.apps.workspace_play import apply_play, prepare_play
+    from modmesh.core.games import EnvironmentIssue, EnvironmentReport
+
+    settings, installation, (workspace, _) = await workspace_setup(root)
+    plan = await prepare_play(settings, workspace.pack_id, installation, workspace.digest)
+    with patch("modmesh.apps.guarded_launch.NativeLaunchBoundary") as boundary:
+        boundary.return_value.invoke.side_effect = RuntimeError("password=hidden")
+        result = apply_play(settings, plan, plan.fingerprint)
+        assert result["state"] == "uncertain" and "hidden" not in result["detail"]
+        assert launch_status(settings, installation)["mutation_blocked"]
+        with patch(
+            "modmesh.adapters.games.palworld.PalworldAdapter.validate_operation",
+            return_value=EnvironmentReport((EnvironmentIssue("game_running", "Busy", True),)),
+        ):
+            try:
+                prepare_launch_release(settings, installation)
+            except ModMeshError:
+                pass
+            else:
+                raise AssertionError("Running game allowed guard release")
+        release = prepare_launch_release(settings, installation)
+        assert not release.document()["automatic_retry"]
+        for approval, cleared in (("wrong", True), (release.fingerprint, False)):
+            try:
+                release_launch(settings, installation, release, approval, queues_cleared=cleared)
+            except ModMeshError:
+                pass
+            else:
+                raise AssertionError("Release bypassed approval or queued request acknowledgement")
+        before = {
+            p.name: p.read_bytes() for p in (installation.path / "Pal/Content/Paks/~mods").iterdir()
+        }
+        release_launch(settings, installation, release, release.fingerprint, queues_cleared=True)
+        assert not launch_status(settings, installation)["mutation_blocked"]
+        assert active_workspace(settings, installation)["state"] == "active"
+        assert before == {
+            p.name: p.read_bytes() for p in (installation.path / "Pal/Content/Paks/~mods").iterdir()
+        }
+        assert boundary.return_value.invoke.call_count == 1
+        retry = await prepare_play(settings, workspace.pack_id, installation, workspace.digest)
+        boundary.return_value.invoke.side_effect = None
+        boundary.return_value.invoke.return_value = LaunchCall(
+            LaunchCallState.FAILED, detail="OS handler unavailable"
+        )
+        failed = apply_play(settings, retry, retry.fingerprint)
+        assert failed["state"] == "failed"
+        status = launch_status(settings, installation)
+        assert not status["mutation_blocked"] and status["journal_consistent"]
+        assert len(status["attempts"]) == 2
+        assert active_workspace(settings, installation)["state"] == "active"
+
+
 async def main() -> None:
     logging.disable(logging.CRITICAL)
     with TemporaryDirectory(prefix="modmesh-safety-") as name:
         check_launch_contracts(Path(name) / "launch-contracts")
         await check_launch_guards(Path(name) / "launch-guards")
         await check_workspace_play(Path(name) / "workspace-play")
+        await check_launch_recovery(Path(name) / "launch-recovery")
         check_workspace_metadata(Path(name) / "workspaces")
         check_workspace_legacy(Path(name) / "workspace-legacy")
         await check_workspace_import(Path(name) / "workspace-import")
