@@ -1994,15 +1994,15 @@ async def check_workspace_import(root: Path) -> None:
     assert not (game / "Pal/Content/Paks/~mods/user.pak").exists()
     assert prepared.document()["changes"]
     launch = prepare_launch(settings, installation)
-    assert launch.method == LaunchMethod.STEAM and launch.uri == "steam://run/1623730"
+    assert launch.method == LaunchMethod.MANUAL and launch.uri is None
     with (
         patch("modmesh.adapters.launch.current_platform", return_value=Platform.WINDOWS),
         patch("modmesh.adapters.launch.os.startfile", create=True) as opened,
     ):
         called = NativeLaunchBoundary().invoke(launch)
-        assert called.state == LaunchCallState.ACCEPTED
+        assert called.state == LaunchCallState.MANUAL
         assert called.document()["game_process_observed"] is False
-        opened.assert_called_once_with("steam://run/1623730", "open")
+        opened.assert_not_called()
     executable = game / "Palworld.exe"
     original = executable.read_bytes()
     executable.write_bytes(b"updated executable with same unknown game version")
