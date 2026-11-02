@@ -68,6 +68,7 @@ from modmesh.core.games import DiscoveryContext, GameCapability, GameRegistry
 from modmesh.core.hashing import verify_file
 from modmesh.core.identity import EvidenceKind, IdentityEvidence, IdentityRegistry
 from modmesh.core.installation import InstallationManager
+from modmesh.core.launching import LaunchCall, LaunchCallState, LaunchMethod, LaunchPlan
 from modmesh.core.local_files import copy_local
 from modmesh.core.lockfiles import PackLock, build_lock
 from modmesh.core.pack_io import export_profile, read_manifest, resolve_pack, write_manifest
@@ -2555,9 +2556,44 @@ def check_legacy_contracts(root: Path) -> None:
         raise AssertionError("Cancelled discovery saved data")
 
 
+def check_launch_contracts(root: Path) -> None:
+    root.mkdir()
+    plan = LaunchPlan(
+        "palworld",
+        "target",
+        Platform.WINDOWS,
+        root,
+        1,
+        1,
+        "0" * 64,
+        LaunchMethod.MANUAL,
+        instruction="Use the existing launcher after applying the pack",
+    )
+    assert plan.fingerprint == replace(plan).fingerprint
+    assert plan.document()["mod_loading"] == "unverified"
+    call = LaunchCall(LaunchCallState.ACCEPTED, pid=123)
+    assert call.document()["game_process_observed"] is False
+    try:
+        replace(plan, arguments=("--execute",))
+    except ModMeshError:
+        pass
+    else:
+        raise AssertionError("Manual launch accepted an executable payload")
+    steam = replace(plan, method=LaunchMethod.STEAM, uri="steam://run/1623730")
+    assert steam.uri == "steam://run/1623730"
+    for uri in ("file:///program.exe", "steam://run/1623730//-login", "steam://run/0"):
+        try:
+            replace(steam, uri=uri)
+        except ModMeshError:
+            pass
+        else:
+            raise AssertionError("Arbitrary URI accepted as a Steam launch")
+
+
 async def main() -> None:
     logging.disable(logging.CRITICAL)
     with TemporaryDirectory(prefix="modmesh-safety-") as name:
+        check_launch_contracts(Path(name) / "launch-contracts")
         check_workspace_metadata(Path(name) / "workspaces")
         check_workspace_legacy(Path(name) / "workspace-legacy")
         await check_workspace_import(Path(name) / "workspace-import")
